@@ -75,7 +75,7 @@ async def delete_request(callback, button, manager):
     url_close = await create_url("create_get_comment", index)  # TODO сюда вместо index id из бд
     url_kill = await create_url("kill_session")
     token = await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD)["session_token"]
-    answer = await close_ticket(url_answers, APP_TOKEN, token, index)  # TODO сюда тоже вместо index id из бд
+    answer = await close_ticket(url_close, APP_TOKEN, token, index)  # TODO сюда тоже вместо index id из бд
     kill = await kill_session(url_kill, APP_TOKEN, token)
     async with db_async_session_manager() as session:
         await request_repository.delete_request_by_id(session, manager.start_data['request']['id'])
@@ -99,7 +99,7 @@ async def insert_question(message: Message, dialog: DialogProtocol, manager: Dia
     url_comment = await create_url("create_get_comment", index)  # TODO сюда вместо index id из бд
     url_kill = await create_url("kill_session")
     token = await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD)["session_token"]
-    answer = await create_comment(url_answers, APP_TOKEN, token, manager.dialog_data['new_question'], index)  # TODO сюда тоже вместо index id из бд
+    answer = await create_comment(url_comment, APP_TOKEN, token, manager.dialog_data['new_question'], index)  # TODO сюда тоже вместо index id из бд
     kill = await kill_session(url_kill, APP_TOKEN, token)
     await manager.next()
 

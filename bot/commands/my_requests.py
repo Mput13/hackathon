@@ -58,6 +58,7 @@ async def start_deleting(callback: CallbackQuery, button: Button,
 
 
 async def delete_request(callback, button, manager):
+    # TODO: тут можно заодно закрыть запрос
     async with db_async_session_manager() as session:
         await request_repository.delete_request_by_id(session, manager.start_data['request']['id'])
     await manager.next()
@@ -73,6 +74,7 @@ async def confirm_request_question(callback, button, manager):
 async def insert_question(message: Message, dialog: DialogProtocol, manager: DialogManager):
     manager.dialog_data[
         'new_question'] = f"{manager.start_data['request']['question']}\n---------------------\n{message.text}"
+    # TODO: тут я возможно тебя неправильно понял, но зто добавление нового текста к запросу, типа как дополнительный уточняющий вопрос тут тоже нужна апишка
     await manager.next()
 
 

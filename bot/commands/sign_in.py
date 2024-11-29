@@ -52,7 +52,7 @@ async def confirm_password(message: Message, dialog: DialogProtocol, manager: Di
 
 async def no_skit(callback: CallbackQuery, button: Button,
                                manager: DialogManager):
-
+    pass
 
 dialog = Dialog(
     Window(Const(entry['sign_in']), Button(Const('Нет  СКИТ-аккаунта'), id='no_skit', on_click=no_skit),

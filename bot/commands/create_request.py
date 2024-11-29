@@ -61,25 +61,24 @@ async def return_to_main_page_unsuccess(callback: CallbackQuery, button: Button,
 
 async def return_to_main_page_escalation(callback: CallbackQuery, button: Button,
                                          manager: DialogManager):
+    await manager.start(AccountMainPage.main, mode=StartMode.RESET_STACK)
+
+
+async def start_escolation(callback: CallbackQuery, button: Button,
+                           manager: DialogManager):
+    #     TODO: тут запрос в апи, где брать данные смотри по тому где беру их я для бд в коде ниже
     async with db_async_session_manager() as session:
         user_id = (await user_repository.get_user_by_chat_id(session, callback.from_user.id)).id
         await request_repository.create_request(
             session, RequestScheme(
                 question=manager.dialog_data['question'],
-                system_id=None,
+                system_id=None, #TODO: нужно сюда вставить айди заявки СКИТ ну или не нужно, ты же апишкой занимаешься
                 answer=manager.dialog_data['answer'],
                 user_id=user_id,
                 status='escalation'
 
             )
         )
-    await manager.start(AccountMainPage.main, mode=StartMode.RESET_STACK)
-
-
-async def start_escolation(callback: CallbackQuery, button: Button,
-                           manager: DialogManager):
-    #     TODO: формируем сообщение с ссылкой на скит
-    manager.dialog_data['escalation_message'] = 'крутое сообщение с ссылкой'
 
 
 dialog = Dialog(Window(Const(request_creating_text['request_start']), Cancel(Const("Отмена❌")),
@@ -90,10 +89,9 @@ dialog = Dialog(Window(Const(request_creating_text['request_start']), Cancel(Con
                        Back(Const("Назад⬅️")),
                        Cancel(Const("Отмена❌")),
                        state=CreateRequest.answer),
-                Window(Format('{dialog_data[escalation_message]}'),
-                       Row(Button(Const('👍'), id='escalation_success', on_click=return_to_main_page_escalation),
-                           Button(Const('👎'), id='escalation_unsuccess', on_click=return_to_main_page_unsuccess)),
-                       Back(Const("Назад⬅️")),
-                       Cancel(Const("Отмена❌")), state=CreateRequest.escalation))
+                Window(Const('Ваш запрос отправлен, ждите ответа'),
+                       Button(Const('На главный экран'), id='after_escalation_sent',
+                              on_click=return_to_main_page_escalation),
+                       state=CreateRequest.escalation))
 
 dp.include_router(dialog)

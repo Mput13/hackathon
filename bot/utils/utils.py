@@ -81,3 +81,18 @@ def to_cebab(string: str) -> str:
     Из CamelCase в cebab-case
     """
     return re.sub('(?!^)([A-Z]+)', r'-\1', string).lower()
+
+
+async def create_url(resource, id=None):
+    url = "https://5.141.28.151/apirest.php/"
+    resources = \
+        {
+            "init_session": "initSession",
+            "kill_session": "killSession",
+            "ticket_create_update": "Ticket",
+            "ticket_info": f"Ticket/{id}",
+            "create_get_comment": f"Ticket/{id}/ITILFollowup/",
+            "get_solution": f"Ticket/{id}/ITILSolution"
+        }
+    new_url = url + resources[resource]
+    return new_url

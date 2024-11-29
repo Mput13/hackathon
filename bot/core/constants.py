@@ -7,3 +7,7 @@ VALUES_STATUS = \
         6: "закрыта",
         10: "в ожидании согласования",
     }
+
+APP_TOKEN = "9575imBrePXtK5lYZNHqYqX3HCQJIoNFM3SZs3X7"
+LOGIN = "Xantaton"
+PASSWORD = "Krypay1-/"

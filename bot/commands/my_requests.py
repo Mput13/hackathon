@@ -13,6 +13,9 @@ from commands.state_classes import MyRequests, RequestDelete, AddToRequest, Acco
 from core.text import dialogs
 from repositories.request_repository import request_repository
 from utils.database import db_async_session_manager
+from ..utils.utils import create_url
+from ..utils.api_requests import init_session, kill_session, create_comment, get_answers_for_ticket, close_ticket
+from ..core.constants import APP_TOKEN, LOGIN, PASSWORD
 
 my_requests_text = dialogs['my_requests']
 my_requests_router = Router(name='my_requests_router')
@@ -48,6 +51,13 @@ async def start_adding(callback: CallbackQuery, button: Button,
 async def start_answers(callback: CallbackQuery, button: Button,
                         manager: DialogManager):
     # TODO: запрос в апи получает ответы и соединяет их
+    url_init = await create_url("init_session")
+    url_answers = await create_url("get_solution", index)  # TODO сюда вместо index id из бд
+    url_kill = await create_url("kill_session")
+    token = await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD)["session_token"]
+    answer = await get_answers_for_ticket(url_answers, APP_TOKEN,
+                                          token)  # TODO Тут список словарей с ответами в каждом словаре ответ в ["content"] лежит, так что надо придумать что делать если много ответов
+    kill = await kill_session(url_kill, APP_TOKEN, token)
     answers = "FIMOZZZZZZZZZ"
     await manager.start(Answers.answer_showing, data={"updated_answers": answers})
 
@@ -59,6 +69,12 @@ async def start_deleting(callback: CallbackQuery, button: Button,
 
 async def delete_request(callback, button, manager):
     # TODO: тут можно заодно закрыть запрос
+    url_init = await create_url("init_session")
+    url_close = await create_url("create_get_comment", index)  # TODO сюда вместо index id из бд
+    url_kill = await create_url("kill_session")
+    token = await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD)["session_token"]
+    answer = await close_ticket(url_answers, APP_TOKEN, token, index)  # TODO сюда тоже вместо index id из бд
+    kill = await kill_session(url_kill, APP_TOKEN, token)
     async with db_async_session_manager() as session:
         await request_repository.delete_request_by_id(session, manager.start_data['request']['id'])
     await manager.next()
@@ -75,6 +91,13 @@ async def insert_question(message: Message, dialog: DialogProtocol, manager: Dia
     manager.dialog_data[
         'new_question'] = f"{manager.start_data['request']['question']}\n---------------------\n{message.text}"
     # TODO: тут я возможно тебя неправильно понял, но зто добавление нового текста к запросу, типа как дополнительный уточняющий вопрос тут тоже нужна апишка
+    # TODO Короче это добавления комментария к заявке типа уточняющей информации какой-нибудь, эти комментарии также можно посмотреть то есть нужна отдельная кнопочка для этого так как там могут комментировать кто-нибудь из техподдержки
+    url_init = await create_url("init_session")
+    url_comment = await create_url("create_get_comment", index)  # TODO сюда вместо index id из бд
+    url_kill = await create_url("kill_session")
+    token = await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD)["session_token"]
+    answer = await create_comment(url_answers, APP_TOKEN, token, manager.dialog_data['new_question'], index)  # TODO сюда тоже вместо index id из бд
+    kill = await kill_session(url_kill, APP_TOKEN, token)
     await manager.next()
 
 

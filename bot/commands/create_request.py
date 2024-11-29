@@ -13,6 +13,9 @@ from repositories.user_repository import user_repository
 from schemas.request import RequestScheme
 from utils.ai_stuff import get_ai_answer
 from utils.database import db_async_session_manager
+from core.constants import APP_TOKEN, LOGIN, PASSWORD
+from ..utils.api_requests import init_session, kill_session, create_ticket
+from ..utils.utils import create_url
 
 create_request_router = Router(name='create_request_router')
 
@@ -67,12 +70,19 @@ async def return_to_main_page_escalation(callback: CallbackQuery, button: Button
 async def start_escolation(callback: CallbackQuery, button: Button,
                            manager: DialogManager):
     #     TODO: тут запрос в апи, где брать данные смотри по тому где беру их я для бд в коде ниже
+    url_init = await create_url("init_session")
+    url_create = await create_url("ticket_create_update")
+    url_kill = await create_url("kill_session")
+    token = await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD)["session_token"]
+    id = await create_ticket(url_create, APP_TOKEN, token, manager.dialog_data['question'], manager.dialog_data['question'])["id"]
+    kill = await kill_session(url_kill, APP_TOKEN, token)
+
     async with db_async_session_manager() as session:
         user_id = (await user_repository.get_user_by_chat_id(session, callback.from_user.id)).id
         await request_repository.create_request(
             session, RequestScheme(
                 question=manager.dialog_data['question'],
-                system_id=None, #TODO: нужно сюда вставить айди заявки СКИТ ну или не нужно, ты же апишкой занимаешься
+                system_id=id,  # TODO: да это айдишник со СКИТа там много где его надо
                 answer=manager.dialog_data['answer'],
                 user_id=user_id,
                 status='escalation'

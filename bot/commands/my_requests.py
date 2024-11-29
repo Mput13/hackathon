@@ -51,6 +51,7 @@ async def start_adding(callback: CallbackQuery, button: Button,
 async def start_answers(callback: CallbackQuery, button: Button,
                         manager: DialogManager):
     # TODO: запрос в апи получает ответы и соединяет их
+    index = manager.dialog_data['request']['system_id']
     url_init = await create_url("init_session")
     url_answers = await create_url("get_solution", index)  # TODO сюда вместо index id из бд
     url_kill = await create_url("kill_session")
@@ -69,6 +70,7 @@ async def start_deleting(callback: CallbackQuery, button: Button,
 
 async def delete_request(callback, button, manager):
     # TODO: тут можно заодно закрыть запрос
+    index = manager.dialog_data['request']['system_id']
     url_init = await create_url("init_session")
     url_close = await create_url("create_get_comment", index)  # TODO сюда вместо index id из бд
     url_kill = await create_url("kill_session")
@@ -90,6 +92,7 @@ async def confirm_request_question(callback, button, manager):
 async def insert_question(message: Message, dialog: DialogProtocol, manager: DialogManager):
     manager.dialog_data[
         'new_question'] = f"{manager.start_data['request']['question']}\n---------------------\n{message.text}"
+    index = manager.dialog_data['request']['system_id']
     # TODO: тут я возможно тебя неправильно понял, но зто добавление нового текста к запросу, типа как дополнительный уточняющий вопрос тут тоже нужна апишка
     # TODO Короче это добавления комментария к заявке типа уточняющей информации какой-нибудь, эти комментарии также можно посмотреть то есть нужна отдельная кнопочка для этого так как там могут комментировать кто-нибудь из техподдержки
     url_init = await create_url("init_session")

@@ -10,6 +10,10 @@ class AdminMenu(StatesGroup):
     admin_operations = State()
 
 
+class Answers(StatesGroup):
+    answer_showing = State()
+
+
 class CreateRequest(StatesGroup):
     question = State()
     answer = State()

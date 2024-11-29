@@ -9,7 +9,7 @@ from aiogram_dialog.widgets.kbd import Cancel, Select, Column, Button, Back
 from aiogram_dialog.widgets.text import Const, Format
 
 from app import dp
-from commands.state_classes import MyRequests, RequestDelete, AddToRequest, AccountMainPage
+from commands.state_classes import MyRequests, RequestDelete, AddToRequest, AccountMainPage, Answers
 from core.text import dialogs
 from repositories.request_repository import request_repository
 from utils.database import db_async_session_manager
@@ -47,7 +47,9 @@ async def start_adding(callback: CallbackQuery, button: Button,
 
 async def start_answers(callback: CallbackQuery, button: Button,
                         manager: DialogManager):
-    pass
+    # TODO: запрос в апи получает ответы и соединяет их
+    answers = "FIMOZZZZZZZZZ"
+    await manager.start(Answers.answer_showing, data={"updated_answers": answers})
 
 
 async def start_deleting(callback: CallbackQuery, button: Button,
@@ -106,6 +108,9 @@ add_to_request_dialog = Dialog(
     Window(Format('{dialog_data[new_question]}'),
            Button(Const('Подтвердить'), id='confirm', on_click=confirm_request_question),
            Cancel(Const("Отменить")), state=AddToRequest.confirm))
+answers_dialog = Dialog(
+    Window(Format('{start_data[updated_answers]}'), Cancel(Const('Назад')), state=Answers.answer_showing))
+dp.include_router(answers_dialog)
 dp.include_router(add_to_request_dialog)
 dp.include_router(delete_dialog)
 dp.include_router(dialog)

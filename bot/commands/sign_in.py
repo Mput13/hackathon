@@ -1,8 +1,8 @@
 from aiogram import Router
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
 from aiogram_dialog import DialogManager, Dialog, Window, DialogProtocol, StartMode
 from aiogram_dialog.widgets.input import MessageInput
-from aiogram_dialog.widgets.kbd import Back, Cancel, Next
+from aiogram_dialog.widgets.kbd import Back, Cancel, Next, Button
 from aiogram_dialog.widgets.text import Const
 
 from app import dp
@@ -50,11 +50,17 @@ async def confirm_password(message: Message, dialog: DialogProtocol, manager: Di
         await message.delete()
 
 
-dialog = Dialog(Window(Const(entry['sign_in']), Next(Const('далее')), Cancel(Const("Отмена❌")),
-                       MessageInput(insert_login), state=SignIn.login),
-                Window(Const(entry['password']), Back(Const("Назад⬅️")), Cancel(Const("Отмена❌")),
-                       MessageInput(insert_password), state=SignIn.password),
-                Window(Const(entry['password_check']), Back(Const("Назад⬅️")), Cancel(Const("Отмена❌")),
-                       MessageInput(confirm_password), state=SignIn.password_confirm))
+async def no_skit(callback: CallbackQuery, button: Button,
+                               manager: DialogManager):
+
+
+dialog = Dialog(
+    Window(Const(entry['sign_in']), Button(Const('Нет  СКИТ-аккаунта'), id='no_skit', on_click=no_skit),
+           Next(Const('далее')), Cancel(Const("Отмена❌")),
+           MessageInput(insert_login), state=SignIn.login),
+    Window(Const(entry['password']), Back(Const("Назад⬅️")), Cancel(Const("Отмена❌")),
+           MessageInput(insert_password), state=SignIn.password),
+    Window(Const(entry['password_check']), Back(Const("Назад⬅️")), Cancel(Const("Отмена❌")),
+           MessageInput(confirm_password), state=SignIn.password_confirm))
 
 dp.include_router(dialog)

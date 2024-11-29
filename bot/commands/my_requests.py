@@ -13,9 +13,10 @@ from commands.state_classes import MyRequests, RequestDelete, AddToRequest, Acco
 from core.text import dialogs
 from repositories.request_repository import request_repository
 from utils.database import db_async_session_manager
-from ..utils.utils import create_url
-from ..utils.api_requests import init_session, kill_session, create_comment, get_answers_for_ticket, close_ticket
-from ..core.constants import APP_TOKEN, LOGIN, PASSWORD
+from bot.core.constants import APP_TOKEN, LOGIN, PASSWORD
+
+from bot.utils.api_requests import init_session, kill_session, create_comment, get_answers_for_ticket, close_ticket
+from bot.utils.utils import create_url
 
 my_requests_text = dialogs['my_requests']
 my_requests_router = Router(name='my_requests_router')
@@ -29,7 +30,7 @@ async def get_data(**kwargs):
         manager.dialog_data['transition'] = []
         for i, request in enumerate(requests_obj):
             manager.dialog_data['transition'].append(request)
-            requests.append((request.question[:15], i))
+            requests.append((request.question, i))
         return {
             "requests": requests,
             "count": len(requests),
@@ -40,6 +41,10 @@ async def on_request_selected(callback: CallbackQuery, widget: Any,
                               manager: DialogManager, item_id: str):
     request = manager.dialog_data['transition'][int(item_id)]
     manager.dialog_data['request'] = vars(request)
+    index = manager.dialog_data['request']['system_id']
+    # TODO: тут сделай запрос в апишку по поводу статуса заявки, положи в переменную status
+    status = "status"
+    manager.dialog_data['text'] = f"{manager.dialog_data['request']['question']}\nСтатус заявки: {status}"
     await manager.next()
 
 
@@ -55,11 +60,11 @@ async def start_answers(callback: CallbackQuery, button: Button,
     url_init = await create_url("init_session")
     url_answers = await create_url("get_solution", index)  # TODO сюда вместо index id из бд
     url_kill = await create_url("kill_session")
-    token = await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD)["session_token"]
-    answer = await get_answers_for_ticket(url_answers, APP_TOKEN,
+    token = (await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD))["session_token"]
+    answers = await get_answers_for_ticket(url_answers, APP_TOKEN,
                                           token)  # TODO Тут список словарей с ответами в каждом словаре ответ в ["content"] лежит, так что надо придумать что делать если много ответов
     kill = await kill_session(url_kill, APP_TOKEN, token)
-    answers = "FIMOZZZZZZZZZ"
+    answer = "\n----------------------------------------\n".join([el['content'] for el in answers])
     await manager.start(Answers.answer_showing, data={"updated_answers": answers})
 
 
@@ -70,16 +75,16 @@ async def start_deleting(callback: CallbackQuery, button: Button,
 
 async def delete_request(callback, button, manager):
     # TODO: тут можно заодно закрыть запрос
-    index = manager.dialog_data['request']['system_id']
+    index = manager.start_data['request']['system_id']
     url_init = await create_url("init_session")
     url_close = await create_url("create_get_comment", index)  # TODO сюда вместо index id из бд
     url_kill = await create_url("kill_session")
-    token = await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD)["session_token"]
+    token = (await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD))["session_token"]
     answer = await close_ticket(url_close, APP_TOKEN, token, index)  # TODO сюда тоже вместо index id из бд
     kill = await kill_session(url_kill, APP_TOKEN, token)
     async with db_async_session_manager() as session:
         await request_repository.delete_request_by_id(session, manager.start_data['request']['id'])
-    await manager.next()
+    await manager.skip_category()
 
 
 async def confirm_request_question(callback, button, manager):
@@ -92,14 +97,15 @@ async def confirm_request_question(callback, button, manager):
 async def insert_question(message: Message, dialog: DialogProtocol, manager: DialogManager):
     manager.dialog_data[
         'new_question'] = f"{manager.start_data['request']['question']}\n---------------------\n{message.text}"
-    index = manager.dialog_data['request']['system_id']
+    index = manager.start_data['request']['system_id']
     # TODO: тут я возможно тебя неправильно понял, но зто добавление нового текста к запросу, типа как дополнительный уточняющий вопрос тут тоже нужна апишка
     # TODO Короче это добавления комментария к заявке типа уточняющей информации какой-нибудь, эти комментарии также можно посмотреть то есть нужна отдельная кнопочка для этого так как там могут комментировать кто-нибудь из техподдержки
     url_init = await create_url("init_session")
     url_comment = await create_url("create_get_comment", index)  # TODO сюда вместо index id из бд
     url_kill = await create_url("kill_session")
-    token = await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD)["session_token"]
-    answer = await create_comment(url_comment, APP_TOKEN, token, manager.dialog_data['new_question'], index)  # TODO сюда тоже вместо index id из бд
+    token = (await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD))["session_token"]
+    answer = await create_comment(url_comment, APP_TOKEN, token, manager.dialog_data['new_question'],
+                                  index)  # TODO сюда тоже вместо index id из бд
     kill = await kill_session(url_kill, APP_TOKEN, token)
     await manager.next()
 
@@ -116,7 +122,7 @@ kbd = Select(
 dialog = Dialog(Window(Const(my_requests_text['main_page']),
                        Column(kbd,
                               Cancel(Const("Главное меню🏠"))), state=MyRequests.requests, getter=get_data),
-                Window(Format('{dialog_data[request][question]}'),
+                Window(Format('{dialog_data[text]}'),
                        Button(Const("Дополнить"), id='add', on_click=start_adding),
                        Button(Const("Ответы"), id='answers', on_click=start_answers),
                        Button(Const("Удалить заявку"), id='delete', on_click=start_deleting),

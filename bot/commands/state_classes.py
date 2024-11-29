@@ -15,6 +15,7 @@ class Answers(StatesGroup):
 
 
 class CreateRequest(StatesGroup):
+    category = State()
     question = State()
     answer = State()
     escalation = State()

@@ -52,7 +52,7 @@ async def ask_ai(model, client, question) -> str:
                 raise e
 
 
-async def get_ai_answer(question):
+async def get_ai_answer(question, category=None):
     api_key = "x5IIBLdAZHQ2e7DrpjyVzvQiL2tjk0jV"
     model = "mistral-large-latest"
     client = Mistral(api_key=api_key)
@@ -61,8 +61,8 @@ async def get_ai_answer(question):
                                f' Пиши в таком формате: name: название категории. Вот Категории вопросов:'
                                f' {", ".join(await get_categories())} Если ни одна категория не подходит пиши:'
                                f' name: ошибка')
-
-    category = (await ask_ai(model, client, question_about_category)).split(': ')[1]
+    if not category:
+        category = (await ask_ai(model, client, question_about_category)).split(': ')[1]
 
     if 'ошибка' in category:
         return 'Нейросеть не смогла ответить на ваш вопрос'

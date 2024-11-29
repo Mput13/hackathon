@@ -58,7 +58,7 @@ async def my_requests_start(callback: CallbackQuery, button: Button,
 
 async def create_request_start(callback: CallbackQuery, button: Button,
                                manager: DialogManager):
-    await manager.start(CreateRequest.question)
+    await manager.start(CreateRequest.category)
 
 
 entry_window = Window(

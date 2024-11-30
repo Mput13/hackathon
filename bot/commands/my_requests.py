@@ -11,7 +11,7 @@ from aiogram_dialog.widgets.text import Const, Format
 from app import dp
 from bot.core.constants import APP_TOKEN, LOGIN, PASSWORD, VALUES_STATUS
 from bot.utils.api_requests import init_session, kill_session, create_comment, get_answers_for_ticket, close_ticket, \
-    get_info_ticket
+    get_info_ticket, get_comments_for_ticket
 from bot.utils.utils import create_url
 from commands.state_classes import MyRequests, RequestDelete, AddToRequest, AccountMainPage, Answers, Comments
 from core.text import dialogs
@@ -73,9 +73,11 @@ async def start_answers(callback: CallbackQuery, button: Button,
         answers = await get_answers_for_ticket(url_answers, APP_TOKEN,
                                                token)  # TODO Тут список словарей с ответами в каждом словаре ответ в ["content"] лежит, так что надо придумать что делать если много ответов
         kill = await kill_session(url_kill, APP_TOKEN, token)
-        for el in answers:
-            lst.append(el['content'])
-        answer = "\n----------------------------------------\n".join(lst)
+        answer = "Ответа не получено"
+        if answers:
+            for el in answers:
+                lst.append(el['content'])
+            answer = "\n----------------------------------------\n".join(lst)
     else:
         answer = manager.dialog_data['request']['answer']
     await manager.start(Answers.answer_showing, data={"updated_answers": answer})
@@ -92,13 +94,14 @@ async def start_comments(callback: CallbackQuery, button: Button,
         # TODO это запрос для ответов, переделай под комментарии
         index = manager.dialog_data['request']['system_id']
         url_init = await create_url("init_session")
-        url_answers = await create_url("get_solution", index)
+        url_comment = await create_url("create_get_comment", index)
         url_kill = await create_url("kill_session")
         token = (await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD))["session_token"]
-        comments = await get_answers_for_ticket(url_answers, APP_TOKEN,
-                                               token)
+        comments = await get_comments_for_ticket(url_comment, APP_TOKEN, token)
         kill = await kill_session(url_kill, APP_TOKEN, token)
-        comment_text = "\n----------------------------------------\n".join([el['content'] for el in comments])
+        comment_text = "Комментарии отсутствуют"
+        if comments:
+            comment_text = "\n----------------------------------------\n".join([el['content'] for el in comments])
     else:
         comment_text = "Комментарии отсутствуют"
     await manager.start(Comments.comment_showing, data={'text': comment_text})

@@ -14,7 +14,7 @@ from bot.utils.api_requests import init_session, kill_session, create_comment, g
     get_info_ticket, get_comments_for_ticket, recreate_ticket
 from bot.utils.utils import create_url
 from commands.state_classes import MyRequests, RequestDelete, AddToRequest, AccountMainPage, Answers, Comments, \
-    RequestClose, OpenedRequest, ClosedRequest, ReopenRequest
+    RequestClose, OpenedRequest, ClosedRequest, ReopenRequest, SuccessRequest
 from core.text import dialogs
 from models.request import RequestStatus
 from repositories.request_repository import request_repository
@@ -52,13 +52,15 @@ async def on_request_selected(callback: CallbackQuery, widget: Any,
     token = (await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD))["session_token"]
     state = (await get_info_ticket(url_info, APP_TOKEN, token))
     kill = await kill_session(url_kill, APP_TOKEN, token)
-    status = VALUES_STATUS[state['status']]
+    status = "Заглушка"
     if manager.dialog_data['request']['status'] == RequestStatus.ESCALATION:
+        status = VALUES_STATUS[state['status']]
         manager.dialog_data['text'] = f"{manager.dialog_data['request']['question']}\nСтатус заявки: {status}"
     else:
         manager.dialog_data['text'] = f"{manager.dialog_data['request']['question']}"
-    print(status)
-    if status != VALUES_STATUS[6]:
+    if manager.dialog_data['request']['status'] == RequestStatus.SUCCESSFUL:
+        await manager.start(SuccessRequest.request_menu, data=manager.dialog_data)
+    elif status != VALUES_STATUS[6]:
         await manager.start(OpenedRequest.request_menu, data=manager.dialog_data)
     else:
         await manager.start(ClosedRequest.request_menu, data=manager.dialog_data)
@@ -89,7 +91,7 @@ async def start_answers(callback: CallbackQuery, button: Button,
                 lst.append(el['content'])
             answer = "\n----------------------------------------\n".join(lst)
     else:
-        answer = manager.dialog_data['request']['answer']
+        answer = manager.start_data['request']['answer']
     await manager.start(Answers.answer_showing, data={"updated_answers": answer})
 
 
@@ -186,6 +188,7 @@ async def finish(callback, button, manager: DialogManager):
         user_id = (await user_repository.get_user_by_chat_id(session, callback.from_user.id)).id
     await manager.start(MyRequests.requests, data={'user_id': user_id})
 
+
 kbd = Select(
     Format("{item[0]}"),  # E.g `✓ Apple (1/4)`
     id="s_request_questions",
@@ -207,6 +210,11 @@ request_watch = Dialog(Window(Format('{start_data[text]}'),
                               Button(Const("Удалить заявку"), id='delete', on_click=start_deleting),
                               Cancel(Const("Назад")), state=OpenedRequest.request_menu
                               ))
+success_request_watch = Dialog(Window(Format('{start_data[text]}'),
+                                      Button(Const("Ответы"), id='answers', on_click=start_answers),
+                                      Button(Const("Удалить заявку"), id='delete', on_click=start_deleting),
+                                      Cancel(Const("Назад")), state=SuccessRequest.request_menu
+                                      ))
 closed_request_watch = Dialog(Window(Format('{start_data[text]}'),
                                      Button(Const("Ответы"), id='answers', on_click=start_answers),
                                      Button(Const("Комментарии к заявке"), id='lamba', on_click=start_comments),
@@ -239,6 +247,7 @@ close_ticket_dialog = Dialog(Window(Const('Вы уверены?'),
 reopen_ticket_dialog = Dialog(Window(Const("Успешно!"),
                                      Button(Const('К моим заявкам'), id='finish', on_click=finish),
                                      state=ReopenRequest.result))
+dp.include_router(success_request_watch)
 dp.include_router(reopen_ticket_dialog)
 dp.include_router(closed_request_watch)
 dp.include_router(request_watch)

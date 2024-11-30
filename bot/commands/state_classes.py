@@ -69,6 +69,10 @@ class OpenedRequest(StatesGroup):
     request_menu = State()
 
 
+class SuccessRequest(StatesGroup):
+    request_menu = State()
+
+
 class AdminRequestWatch(StatesGroup):
     request_menu = State()
 

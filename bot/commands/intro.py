@@ -71,7 +71,8 @@ entry_window = Window(
 )
 
 account_window = Window(
-    Const('Привет, как'),
+    Const(
+        """Привет👋, я чат бот СКИТ! Отвечу на любой твой вопрос❓по системе СКИТ. Если у тебя есть вопрос, можешь задать его здесь -> Задать вопрос. Чтобы просмотреть свои заявки нажми "Мои заявки". Сайт СКИТ: https://helpdesk.admhmao.ru/"""),
     Column(Button(Const(intro_dialogs['start']['my_requests']), id='my_requests', on_click=my_requests_start),
            Button(Const(intro_dialogs['start']['create_request']), id='create_request', on_click=create_request_start)),
     state=AccountMainPage.main,

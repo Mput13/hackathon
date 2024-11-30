@@ -7,7 +7,10 @@ class MainMenu(StatesGroup):
 
 class AdminMenu(StatesGroup):
     admin_password = State()
-    admin_operations = State()
+    days = State()
+    admin_menu = State()
+    requests_choose = State()
+    request = State()
 
 
 class Answers(StatesGroup):

@@ -30,7 +30,7 @@ dialogs = {
         'no_such_login': 'Такого логина не существует, попробуйте другой.',
         'wrong_password': 'Неверный пароль, попробуйте снова.'
     },
-    'creating_request': {'request_start': 'Отправьте интересующий вас вопрос'},
+    'creating_request': {'request_start': 'Отправьте интересующий вас вопрос форматом: Категория, Вопрос'},
     'my_requests': {'main_page': 'Ваши заявки:'},
     'admin': {
         'manage_articles_button': 'Управлять статьями',

@@ -1,33 +1,10 @@
+
 import logging
 import re
 from typing import Literal
 
 import argon2
-from aiogram import Bot
 from geopy.distance import distance
-from sqlalchemy import select
-
-from models import User
-from utils.database import db_async_session_manager
-import logging
-import re
-from typing import Literal
-
-import argon2
-from aiogram import Bot
-from geopy.distance import distance
-from sqlalchemy import select
-
-from models import User
-from utils.database import db_async_session_manager
-
-
-async def send_message_to_all_users(bot: Bot, message):
-    text = f'{message[0]}\n{message[1]}'
-    async with db_async_session_manager() as session:
-        users = await session.execute(select(User))
-    for user in users.scalars().all():
-        await bot.send_message(chat_id=user.chat_id, text=text)
 
 
 def hash_password(password: str) -> str:

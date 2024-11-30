@@ -20,7 +20,7 @@ class Request(Base, TimestampMixin):
     system_id = Column(Integer, nullable=True)
     question = Column(String, nullable=False)
     answer = Column(String)
-
+    # name = Column(String)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     status = Column(Enum(RequestStatus))
 

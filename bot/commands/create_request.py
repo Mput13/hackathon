@@ -12,6 +12,7 @@ from app import dp
 from commands.state_classes import AccountMainPage, CreateRequest
 from core.constants import APP_TOKEN, LOGIN, PASSWORD
 from core.text import dialogs
+from models.request import RequestStatus
 from repositories.request_repository import request_repository
 from repositories.user_repository import user_repository
 from schemas.request import RequestScheme
@@ -44,7 +45,7 @@ async def return_to_main_page_success(callback: CallbackQuery, button: Button,
                 system_id=None,
                 answer=manager.dialog_data['answer'],
                 user_id=user_id,
-                status='successful'
+                status=RequestStatus.SUCCESSFUL
 
             )
         )
@@ -92,7 +93,7 @@ async def start_escolation(callback: CallbackQuery, button: Button,
                 system_id=id,  # TODO: да это айдишник со СКИТа там много где его надо
                 answer=manager.dialog_data['answer'],
                 user_id=user_id,
-                status='escalation'
+                status=RequestStatus.ESCALATION
 
             )
         )
@@ -133,9 +134,10 @@ kbd = Select(
     on_click=on_category_selected,
 )
 dialog = Dialog(
-    Window(Const('Выберите категорию или нажмите далее, если ее нет в списке'), Column(kbd, Next(Const('далее')),
-                                                                                       Cancel(Const(
-                                                                                           "Главное меню🏠"))),
+    Window(Const('Выберите категорию или нажмите "Другая категория", если ее нет в списке'),
+           Column(kbd, Next(Const('Другая категория')),
+                  Cancel(Const(
+                      "Главное меню🏠"))),
            state=CreateRequest.category, getter=get_data),
     Window(Const(request_creating_text['request_start']),
            Cancel(Const("Отмена❌")),

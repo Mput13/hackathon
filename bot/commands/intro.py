@@ -31,7 +31,7 @@ async def start(message: Message, dialog_manager: DialogManager):
         if user.login_status:
             await dialog_manager.start(AccountMainPage.main)
         else:
-            await dialog_manager.start(Entry.entry)
+            await dialog_manager.start(AccountMainPage.main)
 
 
 @dp.message(Command("admin"))

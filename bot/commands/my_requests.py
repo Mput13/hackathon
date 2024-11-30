@@ -15,6 +15,7 @@ from bot.utils.api_requests import init_session, kill_session, create_comment, g
 from bot.utils.utils import create_url
 from commands.state_classes import MyRequests, RequestDelete, AddToRequest, AccountMainPage, Answers, Comments
 from core.text import dialogs
+from models.request import RequestStatus
 from repositories.request_repository import request_repository
 from utils.database import db_async_session_manager
 
@@ -64,7 +65,7 @@ async def start_answers(callback: CallbackQuery, button: Button,
     # TODO: запрос в апи получает ответы и соединяет их
     lst = []
     lst.append(manager.dialog_data['request']['answer'])
-    if manager.dialog_data['request']['status'] == 'escalation':
+    if manager.dialog_data['request']['status'] == RequestStatus.ESCALATION:
         index = manager.dialog_data['request']['system_id']
         url_init = await create_url("init_session")
         url_answers = await create_url("get_solution", index)  # TODO сюда вместо index id из бд
@@ -90,7 +91,7 @@ async def start_deleting(callback: CallbackQuery, button: Button,
 
 async def start_comments(callback: CallbackQuery, button: Button,
                          manager: DialogManager):
-    if manager.dialog_data['request']['status'] == 'escalation':
+    if manager.dialog_data['request']['status'] == RequestStatus.ESCALATION:
         # TODO это запрос для ответов, переделай под комментарии
         index = manager.dialog_data['request']['system_id']
         url_init = await create_url("init_session")

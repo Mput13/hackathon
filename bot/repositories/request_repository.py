@@ -5,6 +5,7 @@ from sqlalchemy import select, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Request
+from models.request import RequestStatus
 from schemas.request import RequestScheme
 from schemas.user import UserInit
 from utils.utils import to_snake
@@ -73,6 +74,26 @@ class RequestRepository:
 
         self.logger.info(f'Request with ID {request_id} has been deleted')
         return True
+
+    async def get_all_requests(self, session: AsyncSession) -> List[Request]:
+        self.logger.debug('Fetching all requests from all users')
+        result = await session.scalars(select(Request))
+        requests = result.all()
+        if not requests:
+            self.logger.debug('No requests found')
+            return []
+        self.logger.info(f'Found requests: {requests}')
+        return list(requests)
+
+    async def get_escalated_requests(self, session: AsyncSession) -> List[Request]:
+        self.logger.debug('Fetching all escalated requests from all users')
+        result = await session.scalars(select(Request).where(Request.status == RequestStatus.ESCALATION))
+        requests = result.all()
+        if not requests:
+            self.logger.debug('No escalated requests found')
+            return []
+        self.logger.info(f'Found escalated requests: {requests}')
+        return list(requests)
 
 
 request_repository = RequestRepository()

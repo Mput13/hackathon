@@ -61,6 +61,19 @@ class RequestDelete(StatesGroup):
     result = State()
 
 
+class OpenedRequest(StatesGroup):
+    request_menu = State()
+
+
+class ClosedRequest(StatesGroup):
+    request_menu = State()
+
+
+class RequestClose(StatesGroup):
+    sure = State()
+    result = State()
+
+
 class EcoPiggyBank(StatesGroup):
     show = State()
 

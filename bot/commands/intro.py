@@ -71,7 +71,7 @@ entry_window = Window(
 )
 
 account_window = Window(
-    Const('Аккаунт'),
+    Const('Привет, как'),
     Column(Button(Const(intro_dialogs['start']['my_requests']), id='my_requests', on_click=my_requests_start),
            Button(Const(intro_dialogs['start']['create_request']), id='create_request', on_click=create_request_start)),
     state=AccountMainPage.main,

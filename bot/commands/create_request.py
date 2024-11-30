@@ -2,6 +2,7 @@ import operator
 from typing import Any
 
 from aiogram import Router
+from aiogram.enums import ChatAction
 from aiogram.types import Message, CallbackQuery
 from aiogram_dialog import DialogManager, Dialog, Window, DialogProtocol, StartMode
 from aiogram_dialog.widgets.input import MessageInput
@@ -27,11 +28,13 @@ request_creating_text = dialogs['creating_request']
 
 
 async def insert_question(message: Message, dialog: DialogProtocol, manager: DialogManager):
+    await message.bot.send_chat_action(action=ChatAction.TYPING, chat_id=message.chat.id)
     if manager.dialog_data.get('category'):
         manager.dialog_data['answer'] = await get_ai_answer(message.text, category=manager.dialog_data.get('category'))
     else:
         manager.dialog_data['answer'] = await get_ai_answer(message.text)
     manager.dialog_data['question'] = message.text
+    await message.bot.send_chat_action(action=ChatAction.TYPING, chat_id=message.chat.id)
     await manager.next()
 
 
@@ -148,7 +151,7 @@ dialog = Dialog(
            Back(Const("Назад⬅️")),
            Cancel(Const("Отмена❌")),
            state=CreateRequest.answer),
-    Window(Const('Ваш запрос отправлен, ждите ответа'),
+    Window(Const('Ваша заявка отправлен, ждите ответа'),
            Button(Const('На главный экран'), id='after_escalation_sent',
                   on_click=return_to_main_page_escalation),
            state=CreateRequest.escalation))

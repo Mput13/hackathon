@@ -119,9 +119,9 @@ admin_dialog = Dialog(Window(
     Window(Format(
         'Новых пользователей: {dialog_data[new_users]}\nВсего запросов: {dialog_data[requests]}\nУспешных запросов: {dialog_data[successful_requests]}\nЭскалаций: {dialog_data[escalation_requests]}'),
         Column(
-            Button(Const('Эскалационные запросы'), id='escalation_requests', on_click=escalation_requests_start),
+            Button(Const('Эскалационные заявки'), id='escalation_requests', on_click=escalation_requests_start),
             Button(Const("Главное меню🏠"), id="main_menu", on_click=main_menu)),
-        state=AdminMenu.admin_menu), Window(Const("Запросы пользователей"),
+        state=AdminMenu.admin_menu), Window(Const("Заявки пользователей"),
                                             Column(kbd,
                                                    Cancel(Const("Главное меню🏠"))), state=AdminMenu.requests_choose,
                                             getter=get_data),

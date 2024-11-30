@@ -9,15 +9,14 @@ from aiogram_dialog.widgets.kbd import Cancel, Select, Column, Button, Back
 from aiogram_dialog.widgets.text import Const, Format
 
 from app import dp
-from commands.state_classes import MyRequests, RequestDelete, AddToRequest, AccountMainPage, Answers
-from core.text import dialogs
-from repositories.request_repository import request_repository
-from utils.database import db_async_session_manager
 from bot.core.constants import APP_TOKEN, LOGIN, PASSWORD, VALUES_STATUS
-
 from bot.utils.api_requests import init_session, kill_session, create_comment, get_answers_for_ticket, close_ticket, \
     get_info_ticket
 from bot.utils.utils import create_url
+from commands.state_classes import MyRequests, RequestDelete, AddToRequest, AccountMainPage, Answers, Comments
+from core.text import dialogs
+from repositories.request_repository import request_repository
+from utils.database import db_async_session_manager
 
 my_requests_text = dialogs['my_requests']
 my_requests_router = Router(name='my_requests_router')
@@ -63,21 +62,46 @@ async def start_adding(callback: CallbackQuery, button: Button,
 async def start_answers(callback: CallbackQuery, button: Button,
                         manager: DialogManager):
     # TODO: запрос в апи получает ответы и соединяет их
-    index = manager.dialog_data['request']['system_id']
-    url_init = await create_url("init_session")
-    url_answers = await create_url("get_solution", index)  # TODO сюда вместо index id из бд
-    url_kill = await create_url("kill_session")
-    token = (await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD))["session_token"]
-    answers = await get_answers_for_ticket(url_answers, APP_TOKEN,
-                                           token)  # TODO Тут список словарей с ответами в каждом словаре ответ в ["content"] лежит, так что надо придумать что делать если много ответов
-    kill = await kill_session(url_kill, APP_TOKEN, token)
-    answer = "\n----------------------------------------\n".join([el['content'] for el in answers])
+    lst = []
+    lst.append(manager.dialog_data['request']['answer'])
+    if manager.dialog_data['request']['status'] == 'escalation':
+        index = manager.dialog_data['request']['system_id']
+        url_init = await create_url("init_session")
+        url_answers = await create_url("get_solution", index)  # TODO сюда вместо index id из бд
+        url_kill = await create_url("kill_session")
+        token = (await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD))["session_token"]
+        answers = await get_answers_for_ticket(url_answers, APP_TOKEN,
+                                               token)  # TODO Тут список словарей с ответами в каждом словаре ответ в ["content"] лежит, так что надо придумать что делать если много ответов
+        kill = await kill_session(url_kill, APP_TOKEN, token)
+        for el in answers:
+            lst.append(el['content'])
+        answer = "\n----------------------------------------\n".join(lst)
+    else:
+        answer = manager.dialog_data['request']['answer']
     await manager.start(Answers.answer_showing, data={"updated_answers": answer})
 
 
 async def start_deleting(callback: CallbackQuery, button: Button,
                          manager: DialogManager):
     await manager.start(RequestDelete.sure, data=manager.dialog_data)
+
+
+async def start_comments(callback: CallbackQuery, button: Button,
+                         manager: DialogManager):
+    if manager.dialog_data['request']['status'] == 'escalation':
+        # TODO это запрос для ответов, переделай под комментарии
+        index = manager.dialog_data['request']['system_id']
+        url_init = await create_url("init_session")
+        url_answers = await create_url("get_solution", index)
+        url_kill = await create_url("kill_session")
+        token = (await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD))["session_token"]
+        comments = await get_answers_for_ticket(url_answers, APP_TOKEN,
+                                               token)
+        kill = await kill_session(url_kill, APP_TOKEN, token)
+        comment_text = "\n----------------------------------------\n".join([el['content'] for el in comments])
+    else:
+        comment_text = "Комментарии отсутствуют"
+    await manager.start(Comments.comment_showing, data={'text': comment_text})
 
 
 async def delete_request(callback, button, manager):
@@ -132,6 +156,7 @@ dialog = Dialog(Window(Const(my_requests_text['main_page']),
                 Window(Format('{dialog_data[text]}'),
                        Button(Const("Дополнить"), id='add', on_click=start_adding),
                        Button(Const("Ответы"), id='answers', on_click=start_answers),
+                       Button(Const("Комментарии к заявке"), id='lamba', on_click=start_comments),
                        Button(Const("Удалить заявку"), id='delete', on_click=start_deleting),
                        Back(Const("Назад⬅️")),
                        Cancel(Const("Главное меню🏠")), state=MyRequests.request_menu
@@ -143,6 +168,8 @@ delete_dialog = Dialog(Window(Const('Вы уверены?'),
                               Cancel(Const("Отменить")), state=RequestDelete.sure),
                        Window(Const("Успешно!"), Cancel(Const('К моим запросам')),
                               state=RequestDelete.result))
+comments_dialog = Dialog(
+    Window(Format('{start_data[text]}'), Cancel(Const('Назад')), state=Comments.comment_showing))
 add_to_request_dialog = Dialog(
     Window(Const('Отправьте дополнительный вопрос'), Cancel(Const("Отменить")), MessageInput(insert_question),
            state=AddToRequest.insert_question),
@@ -151,6 +178,7 @@ add_to_request_dialog = Dialog(
            Cancel(Const("Отменить")), state=AddToRequest.confirm))
 answers_dialog = Dialog(
     Window(Format('{start_data[updated_answers]}'), Cancel(Const('Назад')), state=Answers.answer_showing))
+dp.include_router(comments_dialog)
 dp.include_router(answers_dialog)
 dp.include_router(add_to_request_dialog)
 dp.include_router(delete_dialog)

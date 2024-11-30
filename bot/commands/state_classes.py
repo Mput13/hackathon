@@ -14,6 +14,10 @@ class Answers(StatesGroup):
     answer_showing = State()
 
 
+class Comments(StatesGroup):
+    comment_showing = State()
+
+
 class CreateRequest(StatesGroup):
     category = State()
     question = State()

@@ -13,9 +13,10 @@ from commands.state_classes import MyRequests, RequestDelete, AddToRequest, Acco
 from core.text import dialogs
 from repositories.request_repository import request_repository
 from utils.database import db_async_session_manager
-from bot.core.constants import APP_TOKEN, LOGIN, PASSWORD
+from bot.core.constants import APP_TOKEN, LOGIN, PASSWORD, VALUES_STATUS
 
-from bot.utils.api_requests import init_session, kill_session, create_comment, get_answers_for_ticket, close_ticket
+from bot.utils.api_requests import init_session, kill_session, create_comment, get_answers_for_ticket, close_ticket, \
+    get_info_ticket
 from bot.utils.utils import create_url
 
 my_requests_text = dialogs['my_requests']
@@ -43,7 +44,13 @@ async def on_request_selected(callback: CallbackQuery, widget: Any,
     manager.dialog_data['request'] = vars(request)
     index = manager.dialog_data['request']['system_id']
     # TODO: тут сделай запрос в апишку по поводу статуса заявки, положи в переменную status
-    status = "status"
+    url_init = await create_url("init_session")
+    url_info = await create_url("ticket_info", index)
+    url_kill = await create_url("kill_session")
+    token = (await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD))["session_token"]
+    state = (await get_info_ticket(url_info, APP_TOKEN, token))["status"]
+    kill = await kill_session(url_kill, APP_TOKEN, token)
+    status = VALUES_STATUS[state]
     manager.dialog_data['text'] = f"{manager.dialog_data['request']['question']}\nСтатус заявки: {status}"
     await manager.next()
 
@@ -62,10 +69,10 @@ async def start_answers(callback: CallbackQuery, button: Button,
     url_kill = await create_url("kill_session")
     token = (await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD))["session_token"]
     answers = await get_answers_for_ticket(url_answers, APP_TOKEN,
-                                          token)  # TODO Тут список словарей с ответами в каждом словаре ответ в ["content"] лежит, так что надо придумать что делать если много ответов
+                                           token)  # TODO Тут список словарей с ответами в каждом словаре ответ в ["content"] лежит, так что надо придумать что делать если много ответов
     kill = await kill_session(url_kill, APP_TOKEN, token)
     answer = "\n----------------------------------------\n".join([el['content'] for el in answers])
-    await manager.start(Answers.answer_showing, data={"updated_answers": answers})
+    await manager.start(Answers.answer_showing, data={"updated_answers": answer})
 
 
 async def start_deleting(callback: CallbackQuery, button: Button,

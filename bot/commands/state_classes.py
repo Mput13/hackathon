@@ -61,7 +61,15 @@ class RequestDelete(StatesGroup):
     result = State()
 
 
+class ReopenRequest(StatesGroup):
+    result = State()
+
+
 class OpenedRequest(StatesGroup):
+    request_menu = State()
+
+
+class AdminRequestWatch(StatesGroup):
     request_menu = State()
 
 

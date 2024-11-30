@@ -5,7 +5,7 @@ from aiogram import Router
 from aiogram.types import CallbackQuery, Message
 from aiogram_dialog import DialogManager, Dialog, Window, DialogProtocol, StartMode
 from aiogram_dialog.widgets.input import MessageInput
-from aiogram_dialog.widgets.kbd import Cancel, Select, Column, Button, Back
+from aiogram_dialog.widgets.kbd import Cancel, Select, Column, Button
 from aiogram_dialog.widgets.text import Const, Format
 
 from app import dp
@@ -13,12 +13,12 @@ from bot.core.constants import APP_TOKEN, LOGIN, PASSWORD, VALUES_STATUS
 from bot.utils.api_requests import init_session, kill_session, create_comment, get_answers_for_ticket, close_ticket, \
     get_info_ticket, get_comments_for_ticket, recreate_ticket
 from bot.utils.utils import create_url
-from commands.intro import my_requests_start
 from commands.state_classes import MyRequests, RequestDelete, AddToRequest, AccountMainPage, Answers, Comments, \
-    RequestClose, OpenedRequest, ClosedRequest
+    RequestClose, OpenedRequest, ClosedRequest, ReopenRequest
 from core.text import dialogs
 from models.request import RequestStatus
 from repositories.request_repository import request_repository
+from repositories.user_repository import user_repository
 from utils.database import db_async_session_manager
 
 my_requests_text = dialogs['my_requests']
@@ -112,6 +112,7 @@ async def reopen_request(callback: CallbackQuery, button: Button,
     token = (await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD))["session_token"]
     answer = await recreate_ticket(url_recreate, APP_TOKEN, token, index)  # TODO этот id не надо нам
     kill = await kill_session(url_kill, APP_TOKEN, token)
+    await manager.start(ReopenRequest.result)
 
 
 async def start_comments(callback: CallbackQuery, button: Button,
@@ -179,6 +180,12 @@ async def insert_question(message: Message, dialog: DialogProtocol, manager: Dia
     await manager.next()
 
 
+async def finish(callback, button, manager: DialogManager):
+    await manager.start(AccountMainPage.main, mode=StartMode.RESET_STACK)
+    async with db_async_session_manager() as session:
+        user_id = (await user_repository.get_user_by_chat_id(session, callback.from_user.id)).id
+    await manager.start(MyRequests.requests, data={'user_id': user_id})
+
 kbd = Select(
     Format("{item[0]}"),  # E.g `✓ Apple (1/4)`
     id="s_request_questions",
@@ -198,22 +205,20 @@ request_watch = Dialog(Window(Format('{start_data[text]}'),
                               Button(Const("Комментарии к заявке"), id='lamba', on_click=start_comments),
                               Button(Const("Закрыть заявку"), id='close_ticket', on_click=close_request_start),
                               Button(Const("Удалить заявку"), id='delete', on_click=start_deleting),
-                              Back(Const("Назад⬅️")),
-                              Cancel(Const("Главное меню🏠")), state=OpenedRequest.request_menu
+                              Cancel(Const("Назад")), state=OpenedRequest.request_menu
                               ))
 closed_request_watch = Dialog(Window(Format('{start_data[text]}'),
                                      Button(Const("Ответы"), id='answers', on_click=start_answers),
                                      Button(Const("Комментарии к заявке"), id='lamba', on_click=start_comments),
                                      Button(Const("Переоткрыть заявку"), id='reopen_ticket', on_click=reopen_request),
                                      Button(Const("Удалить заявку"), id='delete', on_click=start_deleting),
-                                     Back(Const("Назад⬅️")),
-                                     Cancel(Const("Главное меню🏠")), state=ClosedRequest.request_menu
+                                     Cancel(Const("Назад")), state=ClosedRequest.request_menu
                                      ))
 delete_dialog = Dialog(Window(Const('Вы уверены?'),
                               Button(Const('Удалить'), id='delete_article', on_click=delete_request),
                               Cancel(Const("Отменить")), state=RequestDelete.sure),
                        Window(Const("Успешно!"),
-                              Button(Const('К моим заявкам'), id='my_requests', on_click=my_requests_start),
+                              Button(Const('К моим заявкам'), id='finish', on_click=finish),
                               state=RequestDelete.result))
 comments_dialog = Dialog(
     Window(Format('{start_data[text]}'), Cancel(Const('Назад')), state=Comments.comment_showing))
@@ -229,9 +234,12 @@ close_ticket_dialog = Dialog(Window(Const('Вы уверены?'),
                                     Button(Format('Закрыть заявку'), id='close_ticket', on_click=close_request),
                                     Cancel(Const("Отменить")), state=RequestClose.sure),
                              Window(Const("Успешно!"),
-                                    Button(Const('К моим заявкам'), id='my_requests', on_click=my_requests_start),
+                                    Button(Const('К моим заявкам'), id='finish', on_click=finish),
                                     state=RequestClose.result))
-
+reopen_ticket_dialog = Dialog(Window(Const("Успешно!"),
+                                     Button(Const('К моим заявкам'), id='finish', on_click=finish),
+                                     state=ReopenRequest.result))
+dp.include_router(reopen_ticket_dialog)
 dp.include_router(closed_request_watch)
 dp.include_router(request_watch)
 dp.include_router(close_ticket_dialog)

@@ -11,19 +11,20 @@ from aiogram_dialog.widgets.text import Const, Format
 from sqlalchemy import select, func
 
 from app import dp
-from commands.my_requests import start_comments, start_answers
-from commands.state_classes import AdminMenu, AccountMainPage
+from commands.state_classes import AdminMenu, AccountMainPage, AdminRequestWatch, Comments, Answers
 from core.constants import APP_TOKEN, LOGIN, PASSWORD, VALUES_STATUS
 from core.text import dialogs
 from models import AdminPassword, Request, User
 from models.request import RequestStatus
 from repositories.request_repository import request_repository
-from utils.api_requests import init_session, get_info_ticket, kill_session
+from utils.api_requests import init_session, get_info_ticket, kill_session, get_comments_for_ticket, \
+    get_answers_for_ticket
 from utils.database import db_async_session_manager
 from utils.utils import check_password, create_url
 
 admin_dialogs = dialogs['admin']
 admin_router = Router(name='admin_router')
+
 
 async def password_sent(message: Message, dialog: DialogProtocol, manager: DialogManager):
     async with db_async_session_manager() as session:
@@ -84,7 +85,50 @@ async def on_request_selected(callback: CallbackQuery, widget: Any,
     kill = await kill_session(url_kill, APP_TOKEN, token)
     status = VALUES_STATUS[state]
     manager.dialog_data['text'] = f"{manager.dialog_data['request']['question']}\nСтатус заявки: {status}"
-    await manager.next()
+    await manager.start(AdminRequestWatch.request_menu, data=manager.dialog_data)
+
+
+async def start_answers(callback: CallbackQuery, button: Button,
+                        manager: DialogManager):
+    # TODO: запрос в апи получает ответы и соединяет их
+    lst = []
+    lst.append(manager.start_data['request']['answer'])
+    if manager.start_data['request']['status'] == RequestStatus.ESCALATION:
+        index = manager.start_data['request']['system_id']
+        url_init = await create_url("init_session")
+        url_answers = await create_url("get_solution", index)  # TODO сюда вместо index id из бд
+        url_kill = await create_url("kill_session")
+        token = (await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD))["session_token"]
+        answers = await get_answers_for_ticket(url_answers, APP_TOKEN,
+                                               token)  # TODO Тут список словарей с ответами в каждом словаре ответ в ["content"] лежит, так что надо придумать что делать если много ответов
+        kill = await kill_session(url_kill, APP_TOKEN, token)
+        answer = "Ответа не получено"
+        if answers:
+            for el in answers:
+                lst.append(el['content'])
+            answer = "\n----------------------------------------\n".join(lst)
+    else:
+        answer = manager.dialog_data['request']['answer']
+    await manager.start(Answers.answer_showing, data={"updated_answers": answer})
+
+
+async def start_comments(callback: CallbackQuery, button: Button,
+                         manager: DialogManager):
+    if manager.start_data['request']['status'] == RequestStatus.ESCALATION:
+        # TODO это запрос для ответов, переделай под комментарии
+        index = manager.start_data['request']['system_id']
+        url_init = await create_url("init_session")
+        url_comment = await create_url("create_get_comment", index)
+        url_kill = await create_url("kill_session")
+        token = (await init_session(url_init, APP_TOKEN, LOGIN, PASSWORD))["session_token"]
+        comments = await get_comments_for_ticket(url_comment, APP_TOKEN, token)
+        kill = await kill_session(url_kill, APP_TOKEN, token)
+        comment_text = "Комментарии отсутствуют"
+        if comments:
+            comment_text = "\n----------------------------------------\n".join([el['content'] for el in comments])
+    else:
+        comment_text = "Комментарии отсутствуют"
+    await manager.start(Comments.comment_showing, data={'text': comment_text})
 
 
 async def get_data(**kwargs):
@@ -124,10 +168,11 @@ admin_dialog = Dialog(Window(
         state=AdminMenu.admin_menu), Window(Const("Заявки пользователей"),
                                             Column(kbd,
                                                    Cancel(Const("Главное меню🏠"))), state=AdminMenu.requests_choose,
-                                            getter=get_data),
-    Window(Format('{dialog_data[text]}'),
-           Button(Const("Ответы"), id='answers', on_click=start_answers),
-           Button(Const("Комментарии к заявке"), id='lamba', on_click=start_comments),
-           Cancel(Const("Меню администратора")), state=AdminMenu.request
-           ))
+                                            getter=get_data))
+admin_request_watch = Dialog(Window(Format('{start_data[text]}'),
+                                    Button(Const("Ответы"), id='basdasd', on_click=start_answers),
+                                    Button(Const("Комментарии к заявке"), id='someshi', on_click=start_comments),
+                                    Cancel(Const("Меню администратора")), state=AdminRequestWatch.request_menu
+                                    ))
+dp.include_router(admin_request_watch)
 dp.include_router(admin_dialog)

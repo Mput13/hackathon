@@ -113,7 +113,8 @@ async def close_ticket(url, app_token, session_token, id):
                 "itemtype": "Ticket",
                 "requesttypes_id": 4,
                 "add_reopen": "Утвердить решение",
-                "content": "Решение одобрено"
+                "content": "Решение одобрено",
+                "_status": 6
             }
     })
     async with aiohttp.ClientSession() as session:

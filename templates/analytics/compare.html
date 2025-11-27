@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+
+{% block header_title %}Version Comparison{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+    
+    <!-- Selector -->
+    <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 mb-6 flex items-center justify-between">
+        <form method="get" class="flex items-center space-x-4">
+            <select name="v1" class="form-select rounded-md border-gray-300 shadow-sm p-2 border">
+                {% for v in versions %}
+                <option value="{{ v.id }}" {% if comparison.v1.id == v.id %}selected{% endif %}>{{ v.name }}</option>
+                {% endfor %}
+            </select>
+            <span class="text-gray-400 font-bold">VS</span>
+            <select name="v2" class="form-select rounded-md border-gray-300 shadow-sm p-2 border">
+                {% for v in versions %}
+                <option value="{{ v.id }}" {% if comparison.v2.id == v.id %}selected{% endif %}>{{ v.name }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors">
+                Analyze Difference
+            </button>
+        </form>
+    </div>
+
+    {% if comparison %}
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <!-- Diff Cards -->
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 text-center">
+            <p class="text-sm text-gray-500 mb-1">Bounce Rate Change</p>
+            <p class="text-4xl font-bold {% if comparison.bounce_diff > 0 %}text-red-500{% else %}text-green-500{% endif %}">
+                {% if comparison.bounce_diff > 0 %}+{% endif %}{{ comparison.bounce_diff }}%
+            </p>
+            <p class="text-xs text-gray-400 mt-2">Lower is better</p>
+        </div>
+
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 text-center">
+            <p class="text-sm text-gray-500 mb-1">Avg Duration Change</p>
+            <p class="text-4xl font-bold {% if comparison.duration_diff > 0 %}text-green-500{% else %}text-red-500{% endif %}">
+                {% if comparison.duration_diff > 0 %}+{% endif %}{{ comparison.duration_diff }}s
+            </p>
+            <p class="text-xs text-gray-400 mt-2">Context dependent</p>
+        </div>
+
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 text-center">
+            <p class="text-sm text-gray-500 mb-1">Traffic Volume</p>
+            <p class="text-4xl font-bold text-gray-800">
+                {% if comparison.visits_diff > 0 %}+{% endif %}{{ comparison.visits_diff }}
+            </p>
+            <p class="text-xs text-gray-400 mt-2">Sessions difference</p>
+        </div>
+    </div>
+
+    <!-- Detailed Split View -->
+    <div class="grid grid-cols-2 gap-6">
+        <!-- V1 Column -->
+        <div class="bg-gray-50 p-6 rounded-xl border border-gray-200">
+            <h3 class="font-bold text-gray-500 uppercase tracking-wider mb-4 text-center">{{ comparison.v1.name }}</h3>
+            <div class="space-y-4">
+                <div class="bg-white p-4 rounded-lg shadow-sm">
+                    <p class="text-sm text-gray-500">Total Visits</p>
+                    <p class="text-xl font-bold">{{ comparison.stats_v1.visits }}</p>
+                </div>
+                <!-- More metrics here -->
+            </div>
+        </div>
+
+        <!-- V2 Column -->
+        <div class="bg-indigo-50 p-6 rounded-xl border border-indigo-100">
+            <h3 class="font-bold text-indigo-500 uppercase tracking-wider mb-4 text-center">{{ comparison.v2.name }}</h3>
+             <div class="space-y-4">
+                <div class="bg-white p-4 rounded-lg shadow-sm">
+                    <p class="text-sm text-gray-500">Total Visits</p>
+                    <p class="text-xl font-bold">{{ comparison.stats_v2.visits }}</p>
+                </div>
+                 <!-- More metrics here -->
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="text-center text-gray-400 py-20">
+        Select two versions to compare
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+

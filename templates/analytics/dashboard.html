@@ -1,0 +1,100 @@
+{% extends 'base.html' %}
+
+{% block header_title %}Executive Dashboard{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
+    {% for stat in version_stats %}
+    <!-- Version Card -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
+        <div class="absolute top-0 right-0 p-3 opacity-10">
+            <span class="text-6xl font-bold">{{ stat.version.name|slice:":2" }}</span>
+        </div>
+        
+        <div class="flex justify-between items-start mb-4">
+            <div>
+                <h3 class="text-lg font-bold text-gray-800">{{ stat.version.name }}</h3>
+                <span class="text-xs font-medium px-2 py-1 bg-green-100 text-green-800 rounded-full">Released: {{ stat.version.release_date }}</span>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4 mt-4">
+            <div>
+                <p class="text-sm text-gray-500">Total Visits</p>
+                <p class="text-2xl font-bold text-gray-900">{{ stat.total_visits }}</p>
+            </div>
+            <div>
+                <p class="text-sm text-gray-500">Bounce Rate</p>
+                <p class="text-2xl font-bold {% if stat.bounce_rate > 40 %}text-red-500{% else %}text-green-500{% endif %}">
+                    {{ stat.bounce_rate }}%
+                </p>
+            </div>
+            <div>
+                <p class="text-sm text-gray-500">Avg Duration</p>
+                <p class="text-2xl font-bold text-gray-900">{{ stat.avg_duration }}s</p>
+            </div>
+            <div>
+                <p class="text-sm text-gray-500">UX Issues</p>
+                <div class="flex items-center">
+                    <p class="text-2xl font-bold text-gray-900">{{ stat.issue_count }}</p>
+                    {% if stat.critical_issues > 0 %}
+                    <span class="ml-2 text-xs font-bold text-red-600 bg-red-100 px-1 rounded">{{ stat.critical_issues }} Crit</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-6">
+            <a href="#" class="block w-full text-center bg-indigo-50 text-indigo-700 py-2 rounded-lg font-medium hover:bg-indigo-100 transition-colors">
+                View Detailed Analysis &rarr;
+            </a>
+        </div>
+    </div>
+    {% endfor %}
+
+    <!-- Add New Version Placeholder -->
+    <div class="bg-gray-50 rounded-xl border-2 border-dashed border-gray-300 p-6 flex flex-col items-center justify-center text-gray-400 hover:border-indigo-300 hover:text-indigo-500 transition-colors cursor-pointer">
+        <svg class="w-12 h-12 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+        <span class="font-medium">Compare New Version</span>
+    </div>
+</div>
+
+<!-- UX Issues Section -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="p-6 border-b border-gray-100 flex justify-between items-center">
+        <h3 class="text-lg font-bold text-gray-800">Recent Detected UX Issues</h3>
+        <button class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">View All</button>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+            <thead>
+                <tr>
+                    <th class="p-4 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wider">Severity</th>
+                    <th class="p-4 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wider">Issue Type</th>
+                    <th class="p-4 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
+                    <th class="p-4 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wider">Impact</th>
+                    <th class="p-4 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wider">AI Insight</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                <!-- This would be populated by a loop in real implementation -->
+                <tr class="hover:bg-gray-50">
+                    <td class="p-4">
+                        <span class="px-2 py-1 text-xs font-bold rounded-full bg-red-100 text-red-700">CRITICAL</span>
+                    </td>
+                    <td class="p-4 font-medium text-gray-900">High Bounce Rate</td>
+                    <td class="p-4 text-gray-500">/products/mortgage/calc</td>
+                    <td class="p-4 text-gray-900 font-bold">9.8</td>
+                    <td class="p-4 text-gray-600 text-sm">
+                        <span class="flex items-center text-indigo-600">
+                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                            Analyze with AI
+                        </span>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+

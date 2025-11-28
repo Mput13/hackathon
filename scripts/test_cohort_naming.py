@@ -4,7 +4,7 @@ Quick script to sanity-check cohort naming for collisions.
 Usage:
     python scripts/test_cohort_naming.py
 """
-from analytics.ai_service import generate_cohort_name
+from analytics.ai_service import generate_cohort_name, ISSUE_EXAMPLES
 
 
 def test_cases():
@@ -72,4 +72,5 @@ def main():
 
 
 if __name__ == "__main__":
+    print("Issue type examples:", ISSUE_EXAMPLES)
     main()

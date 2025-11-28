@@ -45,25 +45,24 @@
         </div>
 
         <div class="mt-6">
-            <a href="#" class="block w-full text-center bg-indigo-50 text-indigo-700 py-2 rounded-lg font-medium hover:bg-indigo-100 transition-colors">
-                View Detailed Analysis &rarr;
+            <a href="{% url 'compare' %}?v1={{ stat.version.id }}" class="block w-full text-center bg-indigo-50 text-indigo-700 py-2 rounded-lg font-medium hover:bg-indigo-100 transition-colors">
+                Compare Version &rarr;
             </a>
         </div>
     </div>
     {% endfor %}
 
     <!-- Add New Version Placeholder -->
-    <div class="bg-gray-50 rounded-xl border-2 border-dashed border-gray-300 p-6 flex flex-col items-center justify-center text-gray-400 hover:border-indigo-300 hover:text-indigo-500 transition-colors cursor-pointer">
+    <a href="{% url 'compare' %}" class="bg-gray-50 rounded-xl border-2 border-dashed border-gray-300 p-6 flex flex-col items-center justify-center text-gray-400 hover:border-indigo-300 hover:text-indigo-500 transition-colors cursor-pointer block">
         <svg class="w-12 h-12 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
         <span class="font-medium">Compare New Version</span>
-    </div>
+    </a>
 </div>
 
 <!-- UX Issues Section -->
 <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
     <div class="p-6 border-b border-gray-100 flex justify-between items-center">
         <h3 class="text-lg font-bold text-gray-800">Recent Detected UX Issues</h3>
-        <button class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">View All</button>
     </div>
     <div class="overflow-x-auto">
         <table class="w-full text-left border-collapse">
@@ -77,21 +76,30 @@
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-100">
-                <!-- This would be populated by a loop in real implementation -->
+                {% for issue in recent_issues %}
                 <tr class="hover:bg-gray-50">
                     <td class="p-4">
-                        <span class="px-2 py-1 text-xs font-bold rounded-full bg-red-100 text-red-700">CRITICAL</span>
-                    </td>
-                    <td class="p-4 font-medium text-gray-900">High Bounce Rate</td>
-                    <td class="p-4 text-gray-500">/products/mortgage/calc</td>
-                    <td class="p-4 text-gray-900 font-bold">9.8</td>
-                    <td class="p-4 text-gray-600 text-sm">
-                        <span class="flex items-center text-indigo-600">
-                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                            Analyze with AI
+                        <span class="px-2 py-1 text-xs font-bold rounded-full 
+                        {% if issue.severity == 'CRITICAL' %}bg-red-100 text-red-700
+                        {% elif issue.severity == 'WARNING' %}bg-yellow-100 text-yellow-700
+                        {% else %}bg-blue-100 text-blue-700{% endif %}">
+                            {{ issue.severity }}
                         </span>
                     </td>
+                    <td class="p-4 font-medium text-gray-900">{{ issue.get_issue_type_display }}</td>
+                    <td class="p-4 text-gray-500" title="{{ issue.location_url }}">{{ issue.readable_location }}</td>
+                    <td class="p-4 text-gray-900 font-bold">{{ issue.impact_score }}</td>
+                    <td class="p-4 text-gray-600 text-sm">
+                        {% if issue.ai_hypothesis %}
+                        <div class="text-xs bg-indigo-50 p-2 rounded text-indigo-900 border border-indigo-100">
+                            <span class="font-bold text-indigo-600">AI:</span> {{ issue.ai_hypothesis|truncatechars:100 }}
+                        </div>
+                        {% else %}
+                        <span class="text-gray-400 italic">No analysis yet</span>
+                        {% endif %}
+                    </td>
                 </tr>
+                {% endfor %}
             </tbody>
         </table>
     </div>

@@ -10,13 +10,13 @@
         <form method="get" class="flex items-center space-x-4">
             <select name="v1" class="form-select rounded-md border-gray-300 shadow-sm p-2 border">
                 {% for v in versions %}
-                <option value="{{ v.id }}" {% if comparison.v1.id == v.id %}selected{% endif %}>{{ v.name }}</option>
+                <option value="{{ v.id }}" {% if selected_v1 == v.id %}selected{% endif %}>{{ v.name }}</option>
                 {% endfor %}
             </select>
             <span class="text-gray-400 font-bold">VS</span>
             <select name="v2" class="form-select rounded-md border-gray-300 shadow-sm p-2 border">
                 {% for v in versions %}
-                <option value="{{ v.id }}" {% if comparison.v2.id == v.id %}selected{% endif %}>{{ v.name }}</option>
+                <option value="{{ v.id }}" {% if selected_v2 == v.id %}selected{% endif %}>{{ v.name }}</option>
                 {% endfor %}
             </select>
             <button type="submit" class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors">

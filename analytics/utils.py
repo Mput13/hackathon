@@ -38,8 +38,35 @@ def get_readable_page_name(url: str) -> str:
       https://mai.ru/priem/ -> "Priem"
       /forms/apply_it -> "Forms Apply It"
     """
+    def _friendly_single(segment: str) -> str:
+        parsed = urllib.parse.urlparse(segment)
+        path = parsed.path or segment
+
+        clean = path.strip('/')
+        if not clean:
+            return "Homepage"
+
+        part = clean.split('/')[-1]
+        part = urllib.parse.unquote(part)
+
+        if '.' in part:
+            part = part.split('.')[0]
+
+        friendly = part.replace('-', ' ').replace('_', ' ').strip()
+        return friendly.title() or path
+
     if not url:
         return "Unknown page"
+
+    if '->' in url:
+        parts = [p.strip() for p in url.split('->') if p.strip()]
+        if not parts:
+            return "Unknown page"
+        friendly_parts = [_friendly_single(p) for p in parts]
+        combined = " -> ".join(friendly_parts[:3])
+        if len(friendly_parts) > 3:
+            combined += " -> ..."
+        return combined
 
     parsed = urllib.parse.urlparse(url)
     path = parsed.path or url

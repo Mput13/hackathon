@@ -5,6 +5,7 @@ from django.utils import timezone
 from analytics.models import ProductVersion, VisitSession, PageHit, UXIssue, DailyStat, UserCohort, PageMetrics
 from datetime import datetime, timedelta
 import os
+import urllib.parse
 from analytics.ai_service import analyze_issue_with_ai, generate_cohort_name
 from analytics.utils import GoalParser
 import traceback
@@ -107,10 +108,26 @@ class Command(BaseCommand):
                     df_visits = pd.read_parquet(visits_path, columns=basic_fields)
                     self.stdout.write("Warning: Loaded only basic fields due to column mismatch.")
 
+            def normalize_client_id(val):
+                if pd.isna(val):
+                    return None
+                if isinstance(val, float):
+                    return f"{val:.0f}"
+                if isinstance(val, (int,)):
+                    return str(val)
+                s = str(val)
+                if "e+" in s or "E+" in s:
+                    try:
+                        return f"{float(s):.0f}"
+                    except Exception:
+                        return s
+                return s
+
             # Ensure timestamps are timezone-aware (UTC) to avoid Django naive datetime warnings
             df_visits['ym:s:dateTime'] = pd.to_datetime(df_visits['ym:s:dateTime'], utc=True, errors='coerce')
             # Normalize client IDs to string for consistent joins with hits
-            df_visits['client_id_norm'] = df_visits['ym:s:clientID'].astype(str)
+            df_visits['client_id_norm'] = df_visits['ym:s:clientID'].apply(normalize_client_id)
+            df_visits = df_visits[df_visits['client_id_norm'].notna()]
             df_visits['ym:s:clientID'] = df_visits['client_id_norm']
             self.stdout.write(f"DEBUG: Visits loaded. Shape: {df_visits.shape}")
             
@@ -136,7 +153,8 @@ class Command(BaseCommand):
                 df_hits = pd.read_parquet(hits_path, columns=basic_hits)
                 self.stdout.write("Warning: Loaded only basic hit fields.")
             df_hits['ym:pv:dateTime'] = pd.to_datetime(df_hits['ym:pv:dateTime'], utc=True, errors='coerce')
-            df_hits['client_id_norm'] = df_hits['ym:pv:clientID'].astype(str)
+            df_hits['client_id_norm'] = df_hits['ym:pv:clientID'].apply(normalize_client_id)
+            df_hits = df_hits[df_hits['client_id_norm'].notna()]
             df_hits['ym:pv:clientID'] = df_hits['client_id_norm']
             self.stdout.write(f"DEBUG: Hits loaded. Shape: {df_hits.shape}")
 
@@ -404,6 +422,7 @@ class Command(BaseCommand):
                     'total_views': metric.total_views,
                     'unique_visitors': metric.unique_visitors,
                     'avg_time_on_page': metric.avg_time_on_page,
+                    'bounce_rate': metric.bounce_rate,
                     'exit_rate': metric.exit_rate,
                     'avg_scroll_depth': metric.avg_scroll_depth,
                     'dominant_device': metric.dominant_device,
@@ -433,6 +452,32 @@ class Command(BaseCommand):
         self.stdout.write("Running UX Analysis...")
         issues = []
 
+        def normalize_issue_url(raw_url):
+            """
+            Collapse noisy params (referer/utm/etc) and trailing slashes so the same page
+            does not create multiple issues due to query strings or mixed schemes.
+            """
+            if not isinstance(raw_url, str):
+                return ""
+            parsed = urllib.parse.urlparse(raw_url.strip())
+            netloc = parsed.netloc.lower()
+            path = (parsed.path or "/").rstrip("/") or "/"
+            query_dict = urllib.parse.parse_qs(parsed.query, keep_blank_values=False)
+            for noisy in ['referer', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'yclid', '_openstat', 'from', 'ref']:
+                query_dict.pop(noisy, None)
+            clean_query = urllib.parse.urlencode({k: v[0] if len(v) == 1 else v for k, v in query_dict.items()}, doseq=True)
+            scheme = parsed.scheme.lower() if parsed.scheme else ("https" if netloc else "")
+            if netloc or scheme:
+                return urllib.parse.urlunparse((scheme, netloc, path, '', clean_query, ''))
+            return path + (f"?{clean_query}" if clean_query else "")
+
+        def pick_representative_url(df, norm_column, norm_value):
+            """Return the most frequent raw URL for a normalized value to fetch PageMetrics."""
+            subset = df[df[norm_column] == norm_value]['ym:pv:URL'].dropna()
+            if subset.empty:
+                return norm_value
+            return subset.mode().iloc[0]
+
         # A. Rage Clicks Detection
         df_hits['timestamp'] = pd.to_datetime(df_hits['ym:pv:dateTime'], utc=True)
         df_hits_sorted = df_hits.sort_values(['ym:pv:clientID', 'timestamp'])
@@ -442,16 +487,22 @@ class Command(BaseCommand):
         rage_clicks = df_hits_sorted[
             (df_hits_sorted['time_diff'] < 2) & 
             (df_hits_sorted['ym:pv:URL'] == df_hits_sorted['prev_url'])
-        ]
+        ].copy()
         
         if not rage_clicks.empty:
-            rage_stats = rage_clicks['ym:pv:URL'].value_counts().head(5)
-            for url, count in rage_stats.items():
+            rage_clicks['norm_url'] = rage_clicks['ym:pv:URL'].apply(normalize_issue_url)
+            rage_stats = rage_clicks['norm_url'].value_counts().head(5)
+            for norm_url, count in rage_stats.items():
+                if not norm_url:
+                    continue
+                representative_url = pick_representative_url(rage_clicks, 'norm_url', norm_url)
                 # Получаем метрики страницы
-                page_metrics = PageMetrics.objects.filter(version=version, url=url).first()
+                page_metrics = PageMetrics.objects.filter(version=version, url=representative_url).first()
+                if not page_metrics:
+                    page_metrics = PageMetrics.objects.filter(version=version, url=norm_url).first()
                 ai_text = analyze_issue_with_ai(
                      issue_type='RAGE_CLICK',
-                     location=url,
+                     location=norm_url,
                      metrics_context=f"Количество событий: {count}",
                      page_title=page_metrics.page_title if page_metrics else None,
                      page_metrics={'avg_time': page_metrics.avg_time_on_page if page_metrics else None} if page_metrics else None,
@@ -463,52 +514,29 @@ class Command(BaseCommand):
                     issue_type='RAGE_CLICK',
                     severity='WARNING',
                     description=f"Detected {count} rapid reloads/clicks on this page.",
-                    location_url=url,
+                    location_url=norm_url,
                     affected_sessions=count,
                     impact_score=min(count * 0.1, 10.0),
                     ai_hypothesis=ai_text
                 ))
 
-        # B. High Bounce Rate
-        bounced_visits = df_visits[df_visits['ym:s:visitDuration'] < 15]['ym:s:clientID']
-        bounced_hits = df_hits[df_hits['ym:pv:clientID'].isin(bounced_visits)]
-        
-        if not bounced_hits.empty:
-            bounce_stats = bounced_hits['ym:pv:URL'].value_counts().head(5)
-            for url, count in bounce_stats.items():
-                 page_metrics = PageMetrics.objects.filter(version=version, url=url).first()
-                 ai_text = analyze_issue_with_ai(
-                     issue_type='HIGH_BOUNCE',
-                     location=url,
-                     metrics_context=f"Количество отказов: {count}",
-                     page_title=page_metrics.page_title if page_metrics else None,
-                     page_metrics={'exit_rate': page_metrics.exit_rate if page_metrics else None,
-                                  'avg_time': page_metrics.avg_time_on_page if page_metrics else None} if page_metrics else None,
-                     dominant_cohort=page_metrics.dominant_cohort if page_metrics else None,
-                     dominant_device=page_metrics.dominant_device if page_metrics else None
-                 )
-                 issues.append(UXIssue(
-                    version=version,
-                    issue_type='HIGH_BOUNCE',
-                    severity='CRITICAL',
-                    description=f"High bounce rate detected. {count} users left immediately.",
-                    location_url=url,
-                    affected_sessions=count,
-                    impact_score=min(count * 0.2, 10.0),
-                    ai_hypothesis=ai_text
-                ))
+        nav_back_targets = set()
 
-        # C. Loops
-        loop_counts = df_hits.groupby(['ym:pv:clientID', 'ym:pv:URL']).size()
+        # B. Loops
+        df_hits['norm_url'] = df_hits['ym:pv:URL'].apply(normalize_issue_url)
+        loop_counts = df_hits[df_hits['norm_url'] != ""].groupby(['ym:pv:clientID', 'norm_url']).size()
         loops = loop_counts[loop_counts > 3]
         
         if not loops.empty:
-            loop_urls = loops.index.get_level_values('ym:pv:URL').value_counts().head(5)
-            for url, count in loop_urls.items():
-                page_metrics = PageMetrics.objects.filter(version=version, url=url).first()
+            loop_urls = loops.index.get_level_values('norm_url').value_counts().head(5)
+            for norm_url, count in loop_urls.items():
+                if not norm_url:
+                    continue
+                nav_back_targets.add(norm_url)
+                page_metrics = PageMetrics.objects.filter(version=version, url=norm_url).first()
                 ai_text = analyze_issue_with_ai(
                      issue_type='LOOPING',
-                     location=url,
+                     location=norm_url,
                      metrics_context=f"Количество зацикливаний: {count}",
                      page_title=page_metrics.page_title if page_metrics else None,
                      page_metrics={'avg_time': page_metrics.avg_time_on_page if page_metrics else None} if page_metrics else None,
@@ -520,25 +548,28 @@ class Command(BaseCommand):
                     issue_type='LOOPING',
                     severity='WARNING',
                     description=f"Users keep returning to this page ({count} loop events).",
-                    location_url=url,
+                    location_url=norm_url,
                     affected_sessions=count,
                     impact_score=min(count * 0.15, 10.0),
                     ai_hypothesis=ai_text
                 ))
 
-        # D. WANDERING (Блуждание) - сессии с >10 просмотрами, но без целей
+        # C. WANDERING (Блуждание) - сессии с >10 просмотрами, но без целей
         if 'ym:s:goalsID' in df_visits.columns:
             wandering_visits = df_visits[
                 (df_visits['ym:s:pageViews'] > 10) & 
                 (df_visits['ym:s:goalsID'].isna() | (df_visits['ym:s:goalsID'].astype(str) == '[]'))
-            ]
+            ].copy()
             
             if not wandering_visits.empty:
-                wandering_by_page = wandering_visits.groupby('ym:s:startURL').size()
+                wandering_visits['norm_start_url'] = wandering_visits['ym:s:startURL'].apply(normalize_issue_url)
+                wandering_by_page = wandering_visits.groupby('norm_start_url').size()
                 for entry_page, count in wandering_by_page.head(5).items():
+                    if not entry_page:
+                        continue
                     # Получаем метрики страницы
                     page_metrics = PageMetrics.objects.filter(version=version, url=entry_page).first()
-                    avg_depth = wandering_visits[wandering_visits['ym:s:startURL'] == entry_page]['ym:s:pageViews'].mean()
+                    avg_depth = wandering_visits[wandering_visits['norm_start_url'] == entry_page]['ym:s:pageViews'].mean()
                     metrics_context = f"Количество сессий: {count}, Средняя глубина: {avg_depth:.1f}"
                     
                     ai_text = analyze_issue_with_ai(
@@ -562,39 +593,117 @@ class Command(BaseCommand):
                         ai_hypothesis=ai_text
                     ))
 
-        # E. NAVIGATION_BACK (Частое использование "Назад")
+        # D. NAVIGATION_BACK (Частое использование "Назад")
+        nav_back_targets = set()
         df_hits_sorted = df_hits.sort_values(['ym:pv:clientID', 'ym:pv:dateTime'])
-        df_hits_sorted['prev_url'] = df_hits_sorted.groupby('ym:pv:clientID')['ym:pv:URL'].shift(1)
-        df_hits_sorted['next_url'] = df_hits_sorted.groupby('ym:pv:clientID')['ym:pv:URL'].shift(-1)
+        if not df_hits_sorted.empty:
+            def canonical_loop_key(path_tuple):
+                """
+                Сводит петли к канонической форме, чтобы A->B->A и B->A->B считались одним паттерном.
+                Для двувершинных циклов сортируем вершины; для остальных оставляем как есть.
+                """
+                unique_nodes = set(path_tuple)
+                if len(unique_nodes) == 2:
+                    return tuple(sorted(unique_nodes))
+                return path_tuple
+
+            def canonical_loop_display(path_tuple):
+                """Возвращает детерминированное отображение для канонического ключа."""
+                unique_nodes = set(path_tuple)
+                if len(unique_nodes) == 2:
+                    a, b = sorted(unique_nodes)
+                    return f"{a} -> {b} -> {a}"
+                return " -> ".join(path_tuple)
+
+            # Собираем навигационные циклы 2-3 страниц, чтобы не плодить дубликаты issues
+            loop_events = []
+            for client_id, group in df_hits_sorted.groupby('ym:pv:clientID'):
+                urls = group['ym:pv:URL'].tolist()
+                for idx in range(len(urls)):
+                    for window in (2, 3):  # A->B->A and A->B->C->A
+                        if idx >= window:
+                            seq = urls[idx-window:idx+1]
+                            norm_seq = [normalize_issue_url(u) for u in seq]
+                            if norm_seq[0] and norm_seq[-1] and norm_seq[0] == norm_seq[-1] and len(set(norm_seq)) > 1:
+                                key = canonical_loop_key(tuple(norm_seq))
+                                display = canonical_loop_display(tuple(norm_seq))
+                                loop_events.append((key, display, client_id))
+
+            if loop_events:
+                from collections import defaultdict
+                path_counts = defaultdict(int)
+                path_users = defaultdict(set)
+                path_display = {}
+                for path_key, display_path, client_id in loop_events:
+                    path_counts[path_key] += 1
+                    path_users[path_key].add(client_id)
+                    if path_key not in path_display:
+                        path_display[path_key] = display_path
+
+                top_loops = sorted(path_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+                for path_key, pattern_count in top_loops:
+                    loop_path = path_display.get(path_key, " -> ".join(path_key))
+                    users_count = len(path_users[path_key])
+                    # Берем вторую страницу как проблемную точку для метрик, если есть
+                    target_url = path_key[1] if len(path_key) > 1 else path_key[0]
+                    nav_back_targets.add(target_url)
+                    page_metrics = PageMetrics.objects.filter(version=version, url=target_url).first()
+                    metrics_context = f"Навигационный цикл: {loop_path}. Повторений: {pattern_count}, пользователей: {users_count}"
+
+                    ai_text = analyze_issue_with_ai(
+                        issue_type='NAVIGATION_BACK',
+                        location=loop_path,
+                        metrics_context=metrics_context,
+                        page_title=page_metrics.page_title if page_metrics else None,
+                        page_metrics={'avg_time': page_metrics.avg_time_on_page if page_metrics else None} if page_metrics else None,
+                        dominant_cohort=page_metrics.dominant_cohort if page_metrics else None,
+                        dominant_device=page_metrics.dominant_device if page_metrics else None
+                    )
+                    issues.append(UXIssue(
+                        version=version,
+                        issue_type='NAVIGATION_BACK',
+                        severity='WARNING',
+                        description=f"Users bounce through loop {loop_path} ({pattern_count} back patterns, {users_count} users).",
+                        location_url=loop_path,
+                        affected_sessions=users_count,
+                        impact_score=min(pattern_count * 0.12, 10.0),
+                        ai_hypothesis=ai_text
+                    ))
+
+        # E. HIGH_BOUNCE после учета back-циклов: если страница уже в back loop, не плодим дубль
+        bounced_visits = df_visits[df_visits['ym:s:visitDuration'] < 15]['ym:s:clientID']
+        bounced_hits = df_hits[df_hits['ym:pv:clientID'].isin(bounced_visits)].copy()
         
-        back_patterns = df_hits_sorted[
-            (df_hits_sorted['prev_url'] == df_hits_sorted['next_url']) &
-            (df_hits_sorted['ym:pv:URL'] != df_hits_sorted['prev_url'])
-        ]
-        
-        if not back_patterns.empty:
-            back_stats = back_patterns['ym:pv:URL'].value_counts().head(5)
-            for url, count in back_stats.items():
-                page_metrics = PageMetrics.objects.filter(version=version, url=url).first()
-                metrics_context = f"Количество возвратов: {count}"
-                
-                ai_text = analyze_issue_with_ai(
-                    issue_type='NAVIGATION_BACK',
-                    location=url,
-                    metrics_context=metrics_context,
-                    page_title=page_metrics.page_title if page_metrics else None,
-                    page_metrics={'avg_time': page_metrics.avg_time_on_page if page_metrics else None} if page_metrics else None,
-                    dominant_cohort=page_metrics.dominant_cohort if page_metrics else None,
-                    dominant_device=page_metrics.dominant_device if page_metrics else None
-                )
-                issues.append(UXIssue(
+        if not bounced_hits.empty:
+            bounced_hits['norm_url'] = bounced_hits['ym:pv:URL'].apply(normalize_issue_url)
+            bounce_stats = bounced_hits['norm_url'].value_counts().head(5)
+            for norm_url, count in bounce_stats.items():
+                 if not norm_url:
+                     continue
+                 if norm_url in nav_back_targets:
+                     continue  # уже покрыто back-loop проблемой
+                 representative_url = pick_representative_url(bounced_hits, 'norm_url', norm_url)
+                 page_metrics = PageMetrics.objects.filter(version=version, url=representative_url).first()
+                 if not page_metrics:
+                     page_metrics = PageMetrics.objects.filter(version=version, url=norm_url).first()
+                 ai_text = analyze_issue_with_ai(
+                     issue_type='HIGH_BOUNCE',
+                     location=norm_url,
+                     metrics_context=f"Количество отказов: {count}",
+                     page_title=page_metrics.page_title if page_metrics else None,
+                     page_metrics={'exit_rate': page_metrics.exit_rate if page_metrics else None,
+                                  'avg_time': page_metrics.avg_time_on_page if page_metrics else None} if page_metrics else None,
+                     dominant_cohort=page_metrics.dominant_cohort if page_metrics else None,
+                     dominant_device=page_metrics.dominant_device if page_metrics else None
+                 )
+                 issues.append(UXIssue(
                     version=version,
-                    issue_type='NAVIGATION_BACK',
-                    severity='WARNING',
-                    description=f"Users frequently return to previous page from here ({count} back patterns).",
-                    location_url=url,
+                    issue_type='HIGH_BOUNCE',
+                    severity='CRITICAL',
+                    description=f"High bounce rate detected. {count} users left immediately.",
+                    location_url=norm_url,
                     affected_sessions=count,
-                    impact_score=min(count * 0.12, 10.0),
+                    impact_score=min(count * 0.2, 10.0),
                     ai_hypothesis=ai_text
                 ))
 
@@ -629,13 +738,14 @@ class Command(BaseCommand):
                 if problem_clients:
                     form_urls = long_form[long_form.index.isin(problem_clients)]['url'].value_counts().head(5)
                     for url, count in form_urls.items():
-                        page_metrics = PageMetrics.objects.filter(version=version, url=url).first()
+                        norm_url = normalize_issue_url(url)
+                        page_metrics = PageMetrics.objects.filter(version=version, url=norm_url or url).first()
                         avg_duration = long_form[long_form['url'] == url]['duration'].mean()
                         metrics_context = f"Количество проблемных сессий: {count}, Среднее время на форме: {avg_duration:.1f} сек"
                         
                         ai_text = analyze_issue_with_ai(
                             issue_type='FORM_FIELD_ERRORS',
-                            location=url,
+                            location=norm_url or url,
                             metrics_context=metrics_context,
                             page_title=page_metrics.page_title if page_metrics else None,
                             page_metrics={'avg_time': avg_duration} if page_metrics else None,
@@ -647,7 +757,7 @@ class Command(BaseCommand):
                             issue_type='FORM_FIELD_ERRORS',
                             severity='WARNING',
                             description=f"Users spend {avg_duration:.1f}s on form but don't submit ({count} sessions).",
-                            location_url=url,
+                            location_url=norm_url or url,
                             affected_sessions=count,
                             impact_score=min(count * 0.15, 10.0),
                             ai_hypothesis=ai_text

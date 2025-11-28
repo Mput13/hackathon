@@ -90,7 +90,7 @@
                             {% endif %}
                         </td>
                         <td class="p-4 align-top text-right">
-                            <span class="text-lg font-bold text-gray-900 block">{{ issue.impact_score }}</span>
+                            <span class="text-lg font-bold text-gray-900 block">{{ issue.impact_score|floatformat:"-2" }}</span>
                             <span class="text-xs text-gray-400">Score</span>
                             <div class="mt-1 text-xs text-gray-500">
                                 {{ issue.affected_sessions }} users
@@ -110,4 +110,3 @@
     </div>
 </div>
 {% endblock %}
-

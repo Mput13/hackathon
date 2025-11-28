@@ -89,7 +89,7 @@
                     </td>
                     <td class="p-4 font-medium text-gray-900">{{ issue.get_issue_type_display }}</td>
                     <td class="p-4 text-gray-500" title="{{ issue.location_url }}">{{ issue.readable_location }}</td>
-                    <td class="p-4 text-gray-900 font-bold">{{ issue.impact_score }}</td>
+                    <td class="p-4 text-gray-900 font-bold">{{ issue.impact_score|floatformat:"-2" }}</td>
                     <td class="p-4 text-gray-600 text-sm">
                         {% if issue.ai_hypothesis %}
                         <div class="text-xs bg-indigo-50 p-2 rounded text-indigo-900 border border-indigo-100">
@@ -106,4 +106,3 @@
     </div>
 </div>
 {% endblock %}
-

@@ -5,6 +5,20 @@ from django.http import JsonResponse
 from .models import ProductVersion, VisitSession, UXIssue, DailyStat, UserCohort
 from .utils import get_readable_page_name
 
+TREND_LABELS = {
+    'new': 'Новая проблема',
+    'worse': 'Ухудшилась',
+    'improved': 'Улучшилась',
+    'stable': 'Без изменений',
+}
+
+
+def get_trend_label(trend_code: str) -> str:
+    """Преобразует код динамики в человекочитаемую подпись."""
+    if not trend_code:
+        return TREND_LABELS['new']
+    return TREND_LABELS.get(trend_code, trend_code)
+
 def dashboard(request):
     """Main Dashboard View"""
     versions = ProductVersion.objects.all()
@@ -39,6 +53,7 @@ def dashboard(request):
     recent_issues_list = []
     for issue in recent_issues:
         issue.readable_location = get_readable_page_name(issue.location_url)
+        issue.trend_label = get_trend_label(issue.trend)
         recent_issues_list.append(issue)
 
     context = {
@@ -136,6 +151,7 @@ def issues_list(request):
     issues_list = []
     for issue in issues:
         issue.readable_location = get_readable_page_name(issue.location_url)
+        issue.trend_label = get_trend_label(issue.trend)
         issues_list.append(issue)
         
     context = {
@@ -201,6 +217,11 @@ def api_dashboard(request):
             'readable_location': readable,
             'impact_score': issue.impact_score,
             'ai_hypothesis': issue.ai_hypothesis,
+            'trend': issue.trend,
+            'trend_label': get_trend_label(issue.trend),
+            'priority': issue.priority,
+            'recommended_specialists': issue.recommended_specialists,
+            'detected_version_name': issue.detected_version_name or issue.version.name,
             'created_at': issue.created_at.isoformat(),
         })
 
@@ -287,6 +308,11 @@ def api_issues(request):
             'affected_sessions': issue.affected_sessions,
             'ai_hypothesis': issue.ai_hypothesis,
             'ai_solution': issue.ai_solution,
+            'trend': issue.trend,
+            'trend_label': get_trend_label(issue.trend),
+            'priority': issue.priority,
+            'recommended_specialists': issue.recommended_specialists,
+            'detected_version_name': issue.detected_version_name or issue.version.name,
             'created_at': issue.created_at.isoformat(),
         })
 

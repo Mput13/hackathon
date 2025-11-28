@@ -72,6 +72,7 @@
                     <th class="p-4 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wider">Severity</th>
                     <th class="p-4 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wider">Issue Type</th>
                     <th class="p-4 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
+                    <th class="p-4 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wider">Routing</th>
                     <th class="p-4 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wider">Impact</th>
                     <th class="p-4 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wider">AI Insight</th>
                 </tr>
@@ -89,6 +90,21 @@
                     </td>
                     <td class="p-4 font-medium text-gray-900">{{ issue.get_issue_type_display }}</td>
                     <td class="p-4 text-gray-500" title="{{ issue.location_url }}">{{ issue.readable_location }}</td>
+                    <td class="p-4">
+                        <div class="flex flex-wrap gap-2 text-xs text-gray-600">
+                            <span class="px-2 py-1 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-full">P: {{ issue.priority }}</span>
+                            <span class="px-2 py-1 rounded-full border 
+                                {% if issue.trend == 'worse' %}bg-red-50 border-red-200 text-red-700
+                                {% elif issue.trend == 'improved' %}bg-green-50 border-green-200 text-green-700
+                                {% elif issue.trend == 'stable' %}bg-gray-50 border-gray-200 text-gray-600
+                                {% else %}bg-blue-50 border-blue-200 text-blue-700{% endif %}">
+                                {{ issue.trend_label|default:issue.trend }}
+                            </span>
+                            {% for role in issue.recommended_specialists %}
+                            <span class="px-2 py-1 bg-amber-50 text-amber-700 border border-amber-100 rounded-full">{{ role }}</span>
+                            {% endfor %}
+                        </div>
+                    </td>
                     <td class="p-4 text-gray-900 font-bold">{{ issue.impact_score|floatformat:"-2" }}</td>
                     <td class="p-4 text-gray-600 text-sm">
                         {% if issue.ai_hypothesis %}

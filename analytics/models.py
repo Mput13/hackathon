@@ -93,6 +93,12 @@ class UXIssue(models.Model):
     ai_hypothesis = models.TextField(null=True, blank=True) # Гипотеза от LLM
     ai_solution = models.TextField(null=True, blank=True)   # Решение от LLM
     
+    # Routing & context metadata
+    detected_version_name = models.CharField(max_length=50, default="")
+    trend = models.CharField(max_length=30, default="new")  # new/worse/improved/stable
+    priority = models.CharField(max_length=20, default="P2")
+    recommended_specialists = models.JSONField(default=list)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
 
@@ -154,4 +160,3 @@ class PageMetrics(models.Model):
     
     def __str__(self):
         return f"{self.url} ({self.version.name})"
-

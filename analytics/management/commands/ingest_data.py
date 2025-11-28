@@ -123,9 +123,23 @@ class Command(BaseCommand):
                         return s
                 return s
 
+            def normalize_client_id(val):
+                if pd.isna(val):
+                    return None
+                # Preserve full integer part if float looks like an integer
+                try:
+                    if isinstance(val, float) and val.is_integer():
+                        return str(int(val))
+                except Exception:
+                    pass
+                s = str(val)
+                if s.endswith('.0'):
+                    s = s[:-2]
+                return s
+
             # Ensure timestamps are timezone-aware (UTC) to avoid Django naive datetime warnings
             df_visits['ym:s:dateTime'] = pd.to_datetime(df_visits['ym:s:dateTime'], utc=True, errors='coerce')
-            # Normalize client IDs to string for consistent joins with hits
+            # Normalize client IDs to consistent strings for joins
             df_visits['client_id_norm'] = df_visits['ym:s:clientID'].apply(normalize_client_id)
             df_visits = df_visits[df_visits['client_id_norm'].notna()]
             df_visits['ym:s:clientID'] = df_visits['client_id_norm']
@@ -160,13 +174,27 @@ class Command(BaseCommand):
 
             # 3. Process Visits (Sessions)
             self.stdout.write("Processing Visits...")
-            
-            # Sampling logic (Optional, kept from previous version)
-            if len(df_visits) > 10000:
-                self.stdout.write(f"Sampling 10k visits from {len(df_visits)}...")
-                df_visits = df_visits.head(10000)
+
+            sample_limit = int(os.environ.get("INGEST_SAMPLE_LIMIT", "10000"))
+            if sample_limit > 0 and len(df_visits) > sample_limit:
+                self.stdout.write(f"Sampling {sample_limit} visits from {len(df_visits)}...")
+                df_visits = df_visits.head(sample_limit)
                 client_ids = df_visits['client_id_norm'].unique()
+                before_hits = len(df_hits)
                 df_hits = df_hits[df_hits['client_id_norm'].isin(client_ids)]
+                after_hits = len(df_hits)
+                if after_hits == 0 and before_hits > 0:
+                    self.stdout.write(self.style.WARNING(
+                        "Filtered hits to 0 after sampling clients; keeping all hits to avoid data loss."
+                    ))
+                    df_hits = pd.read_parquet(hits_path, columns=hits_columns)
+                    df_hits['ym:pv:dateTime'] = pd.to_datetime(df_hits['ym:pv:dateTime'], utc=True, errors='coerce')
+                    df_hits['client_id_norm'] = df_hits['ym:pv:clientID'].apply(normalize_client_id)
+                    df_hits = df_hits[df_hits['client_id_norm'].notna()]
+                    df_hits['ym:pv:clientID'] = df_hits['client_id_norm']
+
+            # Cache previous issues for routing comparisons
+            self.prev_issue_index = self.build_previous_issue_index(version)
 
             # Bulk Create Sessions (оптимизировано: создаем и сохраняем батчами)
             self.stdout.write("Creating and saving visits in batches...")
@@ -496,10 +524,12 @@ class Command(BaseCommand):
                 if not norm_url:
                     continue
                 representative_url = pick_representative_url(rage_clicks, 'norm_url', norm_url)
-                # Получаем метрики страницы
                 page_metrics = PageMetrics.objects.filter(version=version, url=representative_url).first()
                 if not page_metrics:
                     page_metrics = PageMetrics.objects.filter(version=version, url=norm_url).first()
+                impact = min(count * 0.1, 10.0)
+                trend = self._calculate_trend('RAGE_CLICK', norm_url, impact)
+                priority = self._calculate_priority('WARNING', impact, count, trend)
                 ai_text = analyze_issue_with_ai(
                      issue_type='RAGE_CLICK',
                      location=norm_url,
@@ -516,8 +546,12 @@ class Command(BaseCommand):
                     description=f"Detected {count} rapid reloads/clicks on this page.",
                     location_url=norm_url,
                     affected_sessions=count,
-                    impact_score=min(count * 0.1, 10.0),
-                    ai_hypothesis=ai_text
+                    impact_score=impact,
+                    ai_hypothesis=ai_text,
+                    detected_version_name=version.name,
+                    trend=trend,
+                    priority=priority,
+                    recommended_specialists=self._recommend_specialists('RAGE_CLICK')
                 ))
 
         nav_back_targets = set()
@@ -534,6 +568,9 @@ class Command(BaseCommand):
                     continue
                 nav_back_targets.add(norm_url)
                 page_metrics = PageMetrics.objects.filter(version=version, url=norm_url).first()
+                impact = min(count * 0.15, 10.0)
+                trend = self._calculate_trend('LOOPING', norm_url, impact)
+                priority = self._calculate_priority('WARNING', impact, count, trend)
                 ai_text = analyze_issue_with_ai(
                      issue_type='LOOPING',
                      location=norm_url,
@@ -550,8 +587,12 @@ class Command(BaseCommand):
                     description=f"Users keep returning to this page ({count} loop events).",
                     location_url=norm_url,
                     affected_sessions=count,
-                    impact_score=min(count * 0.15, 10.0),
-                    ai_hypothesis=ai_text
+                    impact_score=impact,
+                    ai_hypothesis=ai_text,
+                    detected_version_name=version.name,
+                    trend=trend,
+                    priority=priority,
+                    recommended_specialists=self._recommend_specialists('LOOPING')
                 ))
 
         # C. WANDERING (Блуждание) - сессии с >10 просмотрами, но без целей
@@ -594,7 +635,6 @@ class Command(BaseCommand):
                     ))
 
         # D. NAVIGATION_BACK (Частое использование "Назад")
-        nav_back_targets = set()
         df_hits_sorted = df_hits.sort_values(['ym:pv:clientID', 'ym:pv:dateTime'])
         if not df_hits_sorted.empty:
             def canonical_loop_key(path_tuple):
@@ -649,6 +689,9 @@ class Command(BaseCommand):
                     nav_back_targets.add(target_url)
                     page_metrics = PageMetrics.objects.filter(version=version, url=target_url).first()
                     metrics_context = f"Навигационный цикл: {loop_path}. Повторений: {pattern_count}, пользователей: {users_count}"
+                    impact = min(pattern_count * 0.12, 10.0)
+                    trend = self._calculate_trend('NAVIGATION_BACK', loop_path, impact)
+                    priority = self._calculate_priority('WARNING', impact, users_count, trend)
 
                     ai_text = analyze_issue_with_ai(
                         issue_type='NAVIGATION_BACK',
@@ -666,8 +709,12 @@ class Command(BaseCommand):
                         description=f"Users bounce through loop {loop_path} ({pattern_count} back patterns, {users_count} users).",
                         location_url=loop_path,
                         affected_sessions=users_count,
-                        impact_score=min(pattern_count * 0.12, 10.0),
-                        ai_hypothesis=ai_text
+                        impact_score=impact,
+                        ai_hypothesis=ai_text,
+                        detected_version_name=version.name,
+                        trend=trend,
+                        priority=priority,
+                        recommended_specialists=self._recommend_specialists('LOOPING')
                     ))
 
         # E. HIGH_BOUNCE после учета back-циклов: если страница уже в back loop, не плодим дубль
@@ -686,6 +733,9 @@ class Command(BaseCommand):
                  page_metrics = PageMetrics.objects.filter(version=version, url=representative_url).first()
                  if not page_metrics:
                      page_metrics = PageMetrics.objects.filter(version=version, url=norm_url).first()
+                 impact = min(count * 0.2, 10.0)
+                 trend = self._calculate_trend('HIGH_BOUNCE', norm_url, impact)
+                 priority = self._calculate_priority('CRITICAL', impact, count, trend)
                  ai_text = analyze_issue_with_ai(
                      issue_type='HIGH_BOUNCE',
                      location=norm_url,
@@ -703,8 +753,12 @@ class Command(BaseCommand):
                     description=f"High bounce rate detected. {count} users left immediately.",
                     location_url=norm_url,
                     affected_sessions=count,
-                    impact_score=min(count * 0.2, 10.0),
-                    ai_hypothesis=ai_text
+                    impact_score=impact,
+                    ai_hypothesis=ai_text,
+                    detected_version_name=version.name,
+                    trend=trend,
+                    priority=priority,
+                    recommended_specialists=self._recommend_specialists('HIGH_BOUNCE')
                 ))
 
         # F. FORM_FIELD_ERRORS (Ошибки ввода в формах)
@@ -804,6 +858,68 @@ class Command(BaseCommand):
 
         UXIssue.objects.bulk_create(issues)
         self.stdout.write(f"Detected {len(issues)} UX issues.")
+
+    def build_previous_issue_index(self, version):
+        """
+        Собирает последнюю известную проблему на каждую пару (тип, URL) в более старых версиях.
+        Используется для расчета динамики.
+        """
+        older_issues = UXIssue.objects.filter(
+            version__release_date__lt=version.release_date
+        ).order_by('-created_at')
+
+        index = {}
+        for issue in older_issues:
+            key = (issue.issue_type, issue.location_url)
+            if key not in index:
+                index[key] = issue
+        return index
+
+    def _calculate_trend(self, issue_type, location_url, impact_score):
+        """
+        Возвращает строковый код динамики: new/worse/improved/stable.
+        """
+        if not hasattr(self, 'prev_issue_index'):
+            return "new"
+
+        previous = self.prev_issue_index.get((issue_type, location_url))
+        if not previous:
+            return "new"
+
+        diff = impact_score - (previous.impact_score or 0)
+        if diff > 1:
+            return "worse"
+        if diff < -1:
+            return "improved"
+        return "stable"
+
+    def _calculate_priority(self, severity, impact_score, affected_sessions, trend):
+        """
+        Грубая приоритизация для роутинга задач.
+        """
+        base = "P2"
+        if severity == 'CRITICAL' or impact_score >= 8 or affected_sessions >= 100:
+            base = "P0"
+        elif severity == 'WARNING' or impact_score >= 5 or affected_sessions >= 50:
+            base = "P1"
+
+        if trend == "worse" and base != "P0":
+            return "P1" if base == "P2" else base
+        return base
+
+    def _recommend_specialists(self, issue_type):
+        """
+        Выбирает подходящих специалистов под тип проблемы.
+        """
+        mapping = {
+            'RAGE_CLICK': ['UX-дизайнер', 'Фронтенд-разработчик'],
+            'DEAD_CLICK': ['UX-дизайнер', 'Фронтенд-разработчик'],
+            'LOOPING': ['UX-дизайнер', 'Аналитик'],
+            'FORM_ABANDON': ['UX-дизайнер', 'Фронтенд-разработчик', 'Аналитик'],
+            'HIGH_BOUNCE': ['UX-дизайнер', 'Аналитик'],
+        }
+        roles = mapping.get(issue_type, ['Аналитик'])
+        return list(dict.fromkeys(roles))  # preserve order, drop duplicates
 
     def segment_users_into_cohorts(self, version, df_visits, df_hits, goals_config):
         self.stdout.write("--- Starting User Segmentation ---")

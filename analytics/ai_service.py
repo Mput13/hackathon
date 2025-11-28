@@ -1,23 +1,22 @@
 import os
 try:
-    from gigachat import GigaChat
+    from openai import OpenAI
 except ImportError:
-    GigaChat = None
+    OpenAI = None
 
 # Получаем креды из ENV
-# Для GigaChat нужен токен авторизации (обычно base64 "Client_ID:Client_Secret" или готовый access token)
-GIGACHAT_CREDENTIALS = os.environ.get("GIGACHAT_CREDENTIALS") 
+FOLDER_ID = os.environ.get("folder_id")
+API_KEY = os.environ.get("api_key")
 
 def analyze_issue_with_ai(issue_type, location, metrics_context):
     """
-    Отправляет запрос в GigaChat для генерации гипотезы.
+    Отправляет запрос в Yandex AI (через OpenAI client) для генерации гипотезы.
     """
     # Если библиотеки нет, ключа нет или это заглушка - возвращаем стаб
-    if not GIGACHAT_CREDENTIALS or not GigaChat:
+    if not OpenAI or not FOLDER_ID or not API_KEY:
         return generate_stub_hypothesis(issue_type)
 
-    prompt = f"""
-    Ты профессиональный UX-аналитик.
+    prompt_content = f"""
     Проанализируй проблему на сайте.
     
     Тип проблемы: {issue_type}
@@ -29,13 +28,26 @@ def analyze_issue_with_ai(issue_type, location, metrics_context):
     2. Рекомендация по исправлению.
     """
 
+    model = f"gpt://{FOLDER_ID}/qwen3-235b-a22b-fp8/latest"
+
     try:
-        # verify_ssl_certs=False часто нужен в корпоративных сетях или если проблемы с сертификатами Минцифры
-        with GigaChat(credentials=GIGACHAT_CREDENTIALS, verify_ssl_certs=False) as giga:
-            response = giga.chat(prompt)
-            return response.choices[0].message.content
+        client = OpenAI(
+            base_url="https://rest-assistant.api.cloud.yandex.net/v1",
+            api_key=API_KEY,
+            project=FOLDER_ID,
+        )
+        
+        # Используем chat.completions.create (стандартный метод OpenAI)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "Ты - полезный ассистент. Ты профессиональный UX-аналитик."},
+                {"role": "user", "content": prompt_content}
+            ]
+        )
+        return response.choices[0].message.content
     except Exception as e:
-        print(f"GigaChat Error: {e}")
+        print(f"YandexAI Error: {e}")
         return generate_stub_hypothesis(issue_type)
 
 def generate_stub_hypothesis(issue_type):
@@ -47,4 +59,3 @@ def generate_stub_hypothesis(issue_type):
         'FORM_ABANDON': "Гипотеза: Форма содержит избыточные поля. Решение: Внедрить прогрессивное заполнение."
     }
     return stubs.get(issue_type, "Рекомендуется детальный анализ поведения пользователя.")
-

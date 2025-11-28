@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   web:
     build: .
@@ -10,9 +12,6 @@ services:
       - "8000:8000"
     depends_on:
       - db
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
 
   db:
     image: postgres:15-alpine
@@ -27,3 +26,4 @@ services:
 
 volumes:
   postgres_data:
+

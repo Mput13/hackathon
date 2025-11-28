@@ -1,19 +1,18 @@
 import os
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
+import sys
+import requests
+import json
 
 # Получаем креды из ENV
-FOLDER_ID = os.environ.get("folder_id")
-API_KEY = os.environ.get("api_key")
+FOLDER_ID = os.environ.get("FOLDER_ID") or os.environ.get("folder_id")
+API_KEY = os.environ.get("API_KEY") or os.environ.get("api_key")
 
 def analyze_issue_with_ai(issue_type, location, metrics_context):
     """
-    Отправляет запрос в Yandex AI (через OpenAI client) для генерации гипотезы.
+    Отправляет запрос в Yandex Foundation Models (YandexGPT) через REST API.
     """
-    # Если библиотеки нет, ключа нет или это заглушка - возвращаем стаб
-    if not OpenAI or not FOLDER_ID or not API_KEY:
+    if not FOLDER_ID or not API_KEY:
+        # print("DEBUG: Missing FOLDER_ID or API_KEY")
         return generate_stub_hypothesis(issue_type)
 
     prompt_content = f"""
@@ -30,26 +29,48 @@ def analyze_issue_with_ai(issue_type, location, metrics_context):
     - Исправить: одно практическое действие (UI/копирайт/поток/тех), не длиннее 140 символов.
     """
 
-    model = f"gpt://{FOLDER_ID}/qwen3-235b-a22b-fp8/latest"
+    # URL для синхронного режима (completion)
+    url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Api-Key {API_KEY}", # ВАЖНО: Api-Key, а не Bearer
+        "x-folder-id": FOLDER_ID
+    }
+
+    body = {
+        "modelUri": f"gpt://{FOLDER_ID}/yandexgpt/latest",
+        "completionOptions": {
+            "stream": False,
+            "temperature": 0.3,
+            "maxTokens": 2000
+        },
+        "messages": [
+            {
+                "role": "system",
+                "text": "Ты главный UX-аналитик в финтех-команде. Отвечай четко, по делу, без воды."
+            },
+            {
+                "role": "user",
+                "text": prompt_content
+            }
+        ]
+    }
 
     try:
-        client = OpenAI(
-            base_url="https://rest-assistant.api.cloud.yandex.net/v1",
-            api_key=API_KEY,
-            project=FOLDER_ID,
-        )
+        response = requests.post(url, headers=headers, json=body, timeout=10)
         
-        # Используем chat.completions.create (стандартный метод OpenAI)
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "Ты главный UX-аналитик в финтех-команде. Отвечай четко, по делу, без воды."},
-                {"role": "user", "content": prompt_content}
-            ]
-        )
-        return response.choices[0].message.content
+        if response.status_code != 200:
+            print(f"YandexAI Error: Status {response.status_code}, Body: {response.text}")
+            return generate_stub_hypothesis(issue_type)
+            
+        result = response.json()
+        # Структура ответа YandexGPT: result -> alternatives -> [ { message: { text: ... } } ]
+        text = result['result']['alternatives'][0]['message']['text']
+        return text
+
     except Exception as e:
-        print(f"YandexAI Error: {e}")
+        print(f"YandexAI Exception: {e}")
         return generate_stub_hypothesis(issue_type)
 
 def generate_stub_hypothesis(issue_type):

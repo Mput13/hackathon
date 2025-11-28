@@ -71,6 +71,8 @@ class UXIssue(models.Model):
         ('NAVIGATION_BACK', 'Frequent Back Button Usage'),  # НОВОЕ
         ('FORM_FIELD_ERRORS', 'Form Input Errors'),  # НОВОЕ
         ('FUNNEL_DROPOFF', 'Funnel Drop-off Point'),  # НОВОЕ
+        ('SCAN_AND_DROP', 'Scan And Drop'),  # быстро проскроллил и ушёл
+        ('SEARCH_FAIL', 'Search Fail'),  # поиск не дал результата
     ]
     
     SEVERITY = [

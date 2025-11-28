@@ -818,22 +818,22 @@ class Command(BaseCommand):
                         ))
 
         # G. FUNNEL_DROPOFF (Критические точки отказа в воронках)
-        # Для приемной комиссии: определяем популярные пути
-        funnel_steps = ['/', '/lists', '/rating', '/apply']  # Пример для приемной комиссии
+        # Для приемной комиссии/банка: определяем популярные пути
+        funnel_steps = ['/', '/lists', '/rating', '/apply']
         
         for i in range(len(funnel_steps) - 1):
-            step1_url = funnel_steps[i]
-            step2_url = funnel_steps[i+1]
+            step1_url = normalize_issue_url(funnel_steps[i])
+            step2_url = normalize_issue_url(funnel_steps[i+1])
             
-            step1_users = set(df_hits[df_hits['ym:pv:URL'] == step1_url]['ym:pv:clientID'])
-            step2_users = set(df_hits[df_hits['ym:pv:URL'] == step2_url]['ym:pv:clientID'])
+            step1_users = set(df_hits[df_hits['norm_url'] == step1_url]['ym:pv:clientID'])
+            step2_users = set(df_hits[df_hits['norm_url'] == step2_url]['ym:pv:clientID'])
             
             if step1_users:
                 conversion = len(step2_users & step1_users) / len(step1_users)
                 
                 if conversion < 0.3:  # <30% конверсия = критическая точка
                     lost_users = len(step1_users) - len(step2_users & step1_users)
-                    page_metrics = PageMetrics.objects.filter(version=version, url=step1_url).first()
+                    page_metrics = PageMetrics.objects.filter(version=version, url=step1_url).first() or PageMetrics.objects.filter(version=version, url=funnel_steps[i]).first()
                     metrics_context = f"Конверсия {step1_url} -> {step2_url}: {conversion*100:.1f}%, Потеряно пользователей: {lost_users}"
                     
                     ai_text = analyze_issue_with_ai(
@@ -855,6 +855,68 @@ class Command(BaseCommand):
                         impact_score=min(lost_users * 0.2, 10.0),
                         ai_hypothesis=ai_text
                     ))
+
+        # H. SCAN_AND_DROP: высокие выходы при глубоком скролле и коротком времени
+        scan_drop_candidates = PageMetrics.objects.filter(
+            version=version,
+            avg_scroll_depth__gte=80
+        ).order_by('-exit_rate')[:5]
+        for metric in scan_drop_candidates:
+            if metric.exit_rate and metric.exit_rate > 70 and metric.avg_time_on_page < 30:
+                norm_url = normalize_issue_url(metric.url)
+                impact = min(metric.exit_rate / 10, 10.0)
+                ai_text = analyze_issue_with_ai(
+                    issue_type='SCAN_AND_DROP',
+                    location=norm_url,
+                    metrics_context=f"Exit rate: {metric.exit_rate:.1f}%, Avg time: {metric.avg_time_on_page:.1f}s, Scroll: {metric.avg_scroll_depth:.1f}%",
+                    page_title=metric.page_title,
+                    page_metrics={
+                        'exit_rate': metric.exit_rate,
+                        'avg_time': metric.avg_time_on_page,
+                        'scroll_depth': metric.avg_scroll_depth,
+                    },
+                    dominant_cohort=metric.dominant_cohort,
+                    dominant_device=metric.dominant_device
+                )
+                issues.append(UXIssue(
+                    version=version,
+                    issue_type='SCAN_AND_DROP',
+                    severity='WARNING',
+                    description=f"Users scan and leave quickly (exit {metric.exit_rate:.1f}%, time {metric.avg_time_on_page:.1f}s).",
+                    location_url=norm_url,
+                    affected_sessions=int(metric.total_views),
+                    impact_score=impact,
+                    ai_hypothesis=ai_text
+                ))
+
+        # I. SEARCH_FAIL: страницы поиска с высоким exit
+        search_metrics = PageMetrics.objects.filter(version=version, url__icontains='search').order_by('-exit_rate')[:5]
+        for metric in search_metrics:
+            if metric.exit_rate and metric.exit_rate > 70:
+                norm_url = normalize_issue_url(metric.url)
+                impact = min(metric.exit_rate / 8, 10.0)
+                ai_text = analyze_issue_with_ai(
+                    issue_type='SEARCH_FAIL',
+                    location=norm_url,
+                    metrics_context=f"Search exit rate: {metric.exit_rate:.1f}%, Avg time: {metric.avg_time_on_page:.1f}s",
+                    page_title=metric.page_title,
+                    page_metrics={
+                        'exit_rate': metric.exit_rate,
+                        'avg_time': metric.avg_time_on_page,
+                    },
+                    dominant_cohort=metric.dominant_cohort,
+                    dominant_device=metric.dominant_device
+                )
+                issues.append(UXIssue(
+                    version=version,
+                    issue_type='SEARCH_FAIL',
+                    severity='WARNING',
+                    description=f"Search page has high exits ({metric.exit_rate:.1f}% exit rate).",
+                    location_url=norm_url,
+                    affected_sessions=int(metric.total_views),
+                    impact_score=impact,
+                    ai_hypothesis=ai_text
+                ))
 
         UXIssue.objects.bulk_create(issues)
         self.stdout.write(f"Detected {len(issues)} UX issues.")

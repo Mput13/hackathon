@@ -3,9 +3,12 @@ version: '3.8'
 services:
   web:
     build: .
-    command: python manage.py runserver 0.0.0.0:8000
+    # command: python manage.py runserver 0.0.0.0:8000  <-- Removed, handled by entrypoint override
     env_file:
       - .env
+    # Override entrypoint to force fix line endings at runtime because of volume mount
+    entrypoint: >
+      sh -c "apt-get update && apt-get install -y dos2unix && dos2unix /app/entrypoint.sh && /app/entrypoint.sh python manage.py runserver 0.0.0.0:8000"
     volumes:
       - .:/app
     ports:

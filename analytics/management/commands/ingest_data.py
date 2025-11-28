@@ -2,9 +2,10 @@ import pandas as pd
 import numpy as np
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from analytics.models import ProductVersion, VisitSession, PageHit, UXIssue, DailyStat, UserCohort
+from analytics.models import ProductVersion, VisitSession, PageHit, UXIssue, DailyStat, UserCohort, PageMetrics
 from datetime import datetime, timedelta
 import os
+import urllib.parse
 from analytics.ai_service import analyze_issue_with_ai, generate_cohort_name
 from analytics.utils import GoalParser
 import traceback
@@ -19,6 +20,7 @@ class Command(BaseCommand):
         parser.add_argument('--hits', type=str, help='Path to hits parquet file')
         parser.add_argument('--product-version', type=str, help='Version name (e.g., "v1.0")')
         parser.add_argument('--year', type=int, help='Year of data (e.g., 2022)')
+        parser.add_argument('--clear', action='store_true', help='Clear existing data for this version before loading')
 
     def handle(self, *args, **options):
         self.stdout.write("DEBUG: Command started")
@@ -49,6 +51,17 @@ class Command(BaseCommand):
                 defaults={'release_date': datetime(year, 1, 1), 'is_active': True}
             )
             self.stdout.write(f"DEBUG: ProductVersion created: {version.id}")
+            
+            # 1.5. Clear existing data if --clear flag is set
+            if options.get('clear', False):
+                self.stdout.write(self.style.WARNING(f"Clearing existing data for version {version_name}..."))
+                UXIssue.objects.filter(version=version).delete()
+                PageMetrics.objects.filter(version=version).delete()
+                UserCohort.objects.filter(version=version).delete()
+                DailyStat.objects.filter(version=version).delete()
+                PageHit.objects.filter(session__version=version).delete()
+                VisitSession.objects.filter(version=version).delete()
+                self.stdout.write(self.style.SUCCESS("✅ Existing data cleared."))
 
             # 2. Load Data (Using Pandas)
             self.stdout.write(f"Loading Parquet files from {visits_path}...")
@@ -56,24 +69,59 @@ class Command(BaseCommand):
                  self.stdout.write(self.style.ERROR(f"File not found: {visits_path}"))
                  return
             
-            # Visits columns
+            # Visits columns - расширены для новых метрик
             visits_columns = [
                 'ym:s:visitID', 'ym:s:clientID', 'ym:s:dateTime', 
                 'ym:s:visitDuration', 'ym:s:deviceCategory', 'ym:s:referer', 
-                'ym:s:bounce', 'ym:s:pageViews'
-            ]
-            # Try to add goalsID if available (it might not be in all exports)
-            # We'll handle the check during read or by checking schema first, 
-            # but for simplicity here we'll try to read it if we can't check easily.
-            # Actually, let's trust standard Metrika export.
-            visits_columns.append('ym:s:goalsID') 
+                'ym:s:bounce', 'ym:s:pageViews', 'ym:s:goalsID',
+                # Новые поля (100% или >99% заполнено)
+                'ym:s:isNewUser',      # 100%
+                'ym:s:startURL',       # 100%
+                'ym:s:endURL',         # 100%
+                'ym:s:browser',        # 99.9%
+                'ym:s:operatingSystem', # 99.9%
+                'ym:s:screenWidth',    # 100%
+                'ym:s:screenHeight',   # 100%
+                'ym:s:screenFormat',   # 100%
+                # Поля с частичным заполнением (опционально)
+                'ym:s:lastsignReferalSource',  # 25%
+                'ym:s:networkType',            # 42%
+            ] 
 
+            # Пытаемся загрузить все колонки, если какие-то отсутствуют - удаляем их из списка
             try:
                 df_visits = pd.read_parquet(visits_path, columns=visits_columns)
-            except Exception:
-                self.stdout.write("Warning: 'ym:s:goalsID' not found or error reading it. Goal matching by ID disabled.")
-                visits_columns.remove('ym:s:goalsID')
-                df_visits = pd.read_parquet(visits_path, columns=visits_columns)
+            except Exception as e:
+                self.stdout.write(f"Warning: Some columns not found, trying to load available ones. Error: {e}")
+                # Удаляем опциональные поля и пробуем снова
+                optional_fields = ['ym:s:lastsignReferalSource', 'ym:s:networkType', 'ym:s:goalsID']
+                for field in optional_fields:
+                    if field in visits_columns:
+                        visits_columns.remove(field)
+                try:
+                    df_visits = pd.read_parquet(visits_path, columns=visits_columns)
+                except Exception:
+                    # Если все еще ошибка, загружаем только базовые поля
+                    basic_fields = ['ym:s:visitID', 'ym:s:clientID', 'ym:s:dateTime', 
+                                   'ym:s:visitDuration', 'ym:s:deviceCategory', 'ym:s:referer', 
+                                   'ym:s:bounce', 'ym:s:pageViews']
+                    df_visits = pd.read_parquet(visits_path, columns=basic_fields)
+                    self.stdout.write("Warning: Loaded only basic fields due to column mismatch.")
+
+            def normalize_client_id(val):
+                if pd.isna(val):
+                    return None
+                if isinstance(val, float):
+                    return f"{val:.0f}"
+                if isinstance(val, (int,)):
+                    return str(val)
+                s = str(val)
+                if "e+" in s or "E+" in s:
+                    try:
+                        return f"{float(s):.0f}"
+                    except Exception:
+                        return s
+                return s
 
             def normalize_client_id(val):
                 if pd.isna(val):
@@ -97,11 +145,27 @@ class Command(BaseCommand):
             df_visits['ym:s:clientID'] = df_visits['client_id_norm']
             self.stdout.write(f"DEBUG: Visits loaded. Shape: {df_visits.shape}")
             
-            # Hits columns
+            # Hits columns - расширены для новых метрик
             hits_columns = [
-                'ym:pv:clientID', 'ym:pv:dateTime', 'ym:pv:URL', 'ym:pv:title'
+                'ym:pv:clientID', 'ym:pv:dateTime', 'ym:pv:URL', 
+                'ym:pv:title',    # 68% - использовать с проверкой на null
+                # Новые поля
+                'ym:pv:referer',           # 58%
+                'ym:pv:browser',           # 99.9%
+                'ym:pv:operatingSystem',   # 99.9%
+                'ym:pv:screenWidth',       # 100%
+                'ym:pv:screenHeight',      # 100%
+                'ym:pv:deviceCategory',    # 100%
+                'ym:pv:params',            # 31% - для scroll depth (опционально)
             ]
-            df_hits = pd.read_parquet(hits_path, columns=hits_columns)
+            try:
+                df_hits = pd.read_parquet(hits_path, columns=hits_columns)
+            except Exception as e:
+                self.stdout.write(f"Warning: Some hit columns not found, trying basic set. Error: {e}")
+                # Пробуем загрузить только базовые поля
+                basic_hits = ['ym:pv:clientID', 'ym:pv:dateTime', 'ym:pv:URL', 'ym:pv:title']
+                df_hits = pd.read_parquet(hits_path, columns=basic_hits)
+                self.stdout.write("Warning: Loaded only basic hit fields.")
             df_hits['ym:pv:dateTime'] = pd.to_datetime(df_hits['ym:pv:dateTime'], utc=True, errors='coerce')
             df_hits['client_id_norm'] = df_hits['ym:pv:clientID'].apply(normalize_client_id)
             df_hits = df_hits[df_hits['client_id_norm'].notna()]
@@ -132,59 +196,137 @@ class Command(BaseCommand):
             # Cache previous issues for routing comparisons
             self.prev_issue_index = self.build_previous_issue_index(version)
 
-            # Bulk Create Sessions
-            visit_objects = []
-            visit_map_by_client = {} 
+            # Bulk Create Sessions (оптимизировано: создаем и сохраняем батчами)
+            self.stdout.write("Creating and saving visits in batches...")
+            batch_size = 10000
+            total_visits = len(df_visits)
+            visit_map_by_client = {}
             
-            for _, row in df_visits.iterrows():
-                v_id = str(row.get('ym:s:visitID', ''))
-                c_id = str(row.get('client_id_norm', ''))
+            for batch_start in range(0, total_visits, batch_size):
+                batch_end = min(batch_start + batch_size, total_visits)
+                batch_df = df_visits.iloc[batch_start:batch_end]
                 
-                visit = VisitSession(
-                    version=version,
-                    visit_id=v_id,
-                    client_id=c_id,
-                    start_time=pd.to_datetime(row.get('ym:s:dateTime')),
-                    duration_sec=int(row.get('ym:s:visitDuration', 0)),
-                    device_category=row.get('ym:s:deviceCategory', 'unknown'),
-                    source=row.get('ym:s:referer', ''),
-                    bounced=bool(row.get('ym:s:bounce', 0)),
-                    page_views=int(row.get('ym:s:pageViews', 0))
-                )
-                visit_objects.append(visit)
-                visit_map_by_client[c_id] = visit
+                visit_objects = []
+                for _, row in batch_df.iterrows():
+                    v_id = str(row.get('ym:s:visitID', ''))
+                    c_id = str(row.get('client_id_norm', ''))
+                    
+                    # Обработка новых полей с проверкой на наличие
+                    browser_val = row.get('ym:s:browser') if 'ym:s:browser' in row.index else None
+                    os_val = row.get('ym:s:operatingSystem') if 'ym:s:operatingSystem' in row.index else None
+                    screen_w = int(row.get('ym:s:screenWidth', 0)) if 'ym:s:screenWidth' in row.index and pd.notna(row.get('ym:s:screenWidth')) else None
+                    screen_h = int(row.get('ym:s:screenHeight', 0)) if 'ym:s:screenHeight' in row.index and pd.notna(row.get('ym:s:screenHeight')) else None
+                    screen_fmt = row.get('ym:s:screenFormat') if 'ym:s:screenFormat' in row.index else None
+                    is_new = row.get('ym:s:isNewUser') if 'ym:s:isNewUser' in row.index else True
+                    start_url = row.get('ym:s:startURL') if 'ym:s:startURL' in row.index else None
+                    end_url = row.get('ym:s:endURL') if 'ym:s:endURL' in row.index else None
+                    traffic_src = row.get('ym:s:lastsignReferalSource') if 'ym:s:lastsignReferalSource' in row.index else None
+                    net_type = row.get('ym:s:networkType') if 'ym:s:networkType' in row.index else None
+                    
+                    visit = VisitSession(
+                        version=version,
+                        visit_id=v_id,
+                        client_id=c_id,
+                        start_time=pd.to_datetime(row.get('ym:s:dateTime')),
+                        duration_sec=int(row.get('ym:s:visitDuration', 0)),
+                        device_category=row.get('ym:s:deviceCategory', 'unknown'),
+                        source=row.get('ym:s:referer', ''),
+                        bounced=bool(row.get('ym:s:bounce', 0)),
+                        page_views=int(row.get('ym:s:pageViews', 0)),
+                        # Новые поля
+                        browser=browser_val if browser_val and pd.notna(browser_val) else None,
+                        os=os_val if os_val and pd.notna(os_val) else None,
+                        screen_width=screen_w if screen_w and screen_w > 0 else None,
+                        screen_height=screen_h if screen_h and screen_h > 0 else None,
+                        screen_format=screen_fmt if screen_fmt and pd.notna(screen_fmt) else None,
+                        is_returning_visitor=not bool(is_new) if pd.notna(is_new) else False,
+                        entry_page=start_url if start_url and pd.notna(start_url) else None,
+                        exit_page=end_url if end_url and pd.notna(end_url) else None,
+                        traffic_source=traffic_src if traffic_src and pd.notna(traffic_src) else None,
+                        network_type=net_type if net_type and pd.notna(net_type) else None,
+                    )
+                    visit_objects.append(visit)
+                
+                # Сохраняем батч и сразу получаем ID для маппинга
+                created = VisitSession.objects.bulk_create(visit_objects, ignore_conflicts=True)
+                # Получаем сохраненные объекты для маппинга
+                for visit in visit_objects:
+                    visit_map_by_client[visit.client_id] = visit
+                
+                if (batch_start // batch_size) % 10 == 0:
+                    self.stdout.write(f"  Saved {batch_end}/{total_visits} visits...")
             
-            self.stdout.write("DEBUG: Saving visits to DB...")
-            VisitSession.objects.bulk_create(visit_objects, ignore_conflicts=True)
-            self.stdout.write(f"Created {len(visit_objects)} sessions.")
+            self.stdout.write(f"Created {total_visits} sessions.")
 
+            # Получаем маппинг client_id -> session_id из БД
+            self.stdout.write("Loading visit mappings...")
             db_visits = VisitSession.objects.filter(version=version).values('id', 'client_id')
             client_to_visit_pk = {v['client_id']: v['id'] for v in db_visits}
+            self.stdout.write(f"Loaded {len(client_to_visit_pk)} visit mappings.")
 
-            # 4. Process Hits
-            self.stdout.write("Processing Hits...")
-            hit_objects = []
-            for _, row in df_hits.iterrows():
-                c_id = str(row.get('client_id_norm', ''))
-                if c_id in client_to_visit_pk:
-                    hit = PageHit(
-                        session_id=client_to_visit_pk[c_id],
-                        timestamp=pd.to_datetime(row.get('ym:pv:dateTime')),
-                        url=row.get('ym:pv:URL', ''),
-                        page_title=row.get('ym:pv:title', ''),
-                        action_type='view',
-                    )
-                    hit_objects.append(hit)
+            # 4. Process Hits (оптимизировано: батчами)
+            self.stdout.write("Processing and saving hits in batches...")
+            hit_batch_size = 50000
+            total_hits = len(df_hits)
+            total_saved = 0
             
-            self.stdout.write("DEBUG: Saving hits to DB...")
-            PageHit.objects.bulk_create(hit_objects, batch_size=5000)
-            self.stdout.write(f"Created {len(hit_objects)} hits.")
+            for batch_start in range(0, total_hits, hit_batch_size):
+                batch_end = min(batch_start + hit_batch_size, total_hits)
+                batch_df = df_hits.iloc[batch_start:batch_end]
+                
+                hit_objects = []
+                for _, row in batch_df.iterrows():
+                    c_id = str(row.get('client_id_norm', ''))
+                    if c_id in client_to_visit_pk:
+                        # Обработка новых полей с проверкой на наличие
+                        referrer = row.get('ym:pv:referer') if 'ym:pv:referer' in row.index else None
+                        browser_val = row.get('ym:pv:browser') if 'ym:pv:browser' in row.index else None
+                        os_val = row.get('ym:pv:operatingSystem') if 'ym:pv:operatingSystem' in row.index else None
+                        screen_w = int(row.get('ym:pv:screenWidth', 0)) if 'ym:pv:screenWidth' in row.index and pd.notna(row.get('ym:pv:screenWidth')) else None
+                        screen_h = int(row.get('ym:pv:screenHeight', 0)) if 'ym:pv:screenHeight' in row.index and pd.notna(row.get('ym:pv:screenHeight')) else None
+                        device_cat = row.get('ym:pv:deviceCategory') if 'ym:pv:deviceCategory' in row.index else None
+                        
+                        hit = PageHit(
+                            session_id=client_to_visit_pk[c_id],
+                            timestamp=pd.to_datetime(row.get('ym:pv:dateTime')),
+                            url=row.get('ym:pv:URL', ''),
+                            page_title=row.get('ym:pv:title') if pd.notna(row.get('ym:pv:title', '')) else None,
+                            action_type='view',
+                            # Новые поля
+                            referrer_url=referrer if referrer and pd.notna(referrer) else None,
+                            browser=browser_val if browser_val and pd.notna(browser_val) else None,
+                            os=os_val if os_val and pd.notna(os_val) else None,
+                            screen_width=screen_w if screen_w and screen_w > 0 else None,
+                            screen_height=screen_h if screen_h and screen_h > 0 else None,
+                            device_category=device_cat if device_cat and pd.notna(device_cat) else None,
+                            # time_on_page и is_exit будут рассчитаны позже
+                        )
+                        hit_objects.append(hit)
+                
+                # Сохраняем батч
+                if hit_objects:
+                    PageHit.objects.bulk_create(hit_objects, batch_size=5000)
+                    total_saved += len(hit_objects)
+                
+                if (batch_start // hit_batch_size) % 5 == 0:
+                    self.stdout.write(f"  Saved {total_saved} hits ({batch_end}/{total_hits} processed)...")
+            
+            self.stdout.write(f"Created {total_saved} hits.")
+            
+            # 4.5 Calculate time_on_page and is_exit
+            self.calculate_time_on_page(version)
+            
+            # 4.6 Calculate page metrics
+            self.calculate_page_metrics(version)
 
             # 5. Run Analysis (Heuristics)
             self.run_analysis(version, df_hits, df_visits)
 
             # 6. Segment Users into Cohorts (New Logic)
             self.segment_users_into_cohorts(version, df_visits, df_hits, goals_config)
+            
+            # 6.5 Update dominant_cohort in PageMetrics after cohorts are created
+            self.update_page_metrics_cohorts(version)
 
             # 7. Pre-calculate Daily Stats
             self.calculate_daily_stats(version)
@@ -195,10 +337,174 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f"CRITICAL ERROR: {e}"))
             traceback.print_exc()
 
+    def calculate_time_on_page(self, version):
+        """Рассчитывает time_on_page для каждого hit и помечает is_exit (оптимизированная версия через SQL)"""
+        self.stdout.write("Calculating time_on_page and exit flags...")
+        from analytics.models import PageHit
+        from django.db import connection
+        
+        # Используем SQL для быстрого расчета time_on_page (в 10-100 раз быстрее Python-цикла)
+        with connection.cursor() as cursor:
+            # Обновляем time_on_page через SQL window function
+            cursor.execute("""
+                UPDATE analytics_pagehit ph1
+                SET time_on_page = GREATEST(0, EXTRACT(EPOCH FROM (
+                    SELECT ph2.timestamp 
+                    FROM analytics_pagehit ph2 
+                    WHERE ph2.session_id = ph1.session_id 
+                      AND ph2.timestamp > ph1.timestamp 
+                    ORDER BY ph2.timestamp ASC 
+                    LIMIT 1
+                ) - ph1.timestamp))::INTEGER
+                FROM analytics_visitsession vs
+                WHERE ph1.session_id = vs.id 
+                  AND vs.version_id = %s
+                  AND ph1.time_on_page IS NULL
+            """, [version.id])
+            
+            # Помечаем последние hits как exit
+            cursor.execute("""
+                UPDATE analytics_pagehit ph1
+                SET is_exit = TRUE
+                FROM analytics_visitsession vs
+                WHERE ph1.session_id = vs.id 
+                  AND vs.version_id = %s
+                  AND ph1.id = (
+                      SELECT ph2.id 
+                      FROM analytics_pagehit ph2 
+                      WHERE ph2.session_id = ph1.session_id 
+                      ORDER BY ph2.timestamp DESC 
+                      LIMIT 1
+                  )
+            """, [version.id])
+        
+        self.stdout.write("Updated time_on_page and exit flags via SQL (optimized).")
+
+    def calculate_page_metrics(self, version):
+        """Создает/обновляет PageMetrics для каждой страницы (оптимизированная версия)"""
+        self.stdout.write("Calculating page metrics...")
+        from analytics.models import PageMetrics, PageHit, VisitSession
+        from django.db.models import Avg, Count, Q, Max
+        from collections import defaultdict
+        
+        # Один запрос для всех метрик по страницам
+        page_stats = PageHit.objects.filter(session__version=version).values('url').annotate(
+            total_views=Count('id'),
+            unique_visitors=Count('session__client_id', distinct=True),
+            avg_time=Avg('time_on_page'),
+            exit_count=Count('id', filter=Q(is_exit=True)),
+            avg_scroll=Avg('scroll_depth'),
+        )
+        
+        # Получаем dominant device и page_title одним запросом для всех страниц
+        # Группируем по URL и берем самый частый device/title
+        device_data = defaultdict(lambda: defaultdict(int))
+        title_data = defaultdict(lambda: defaultdict(int))
+        
+        # Batch-обработка для device и title
+        hits_for_stats = PageHit.objects.filter(
+            session__version=version
+        ).values('url', 'device_category', 'page_title').exclude(
+            device_category__isnull=True
+        )
+        
+        for hit in hits_for_stats:
+            url = hit['url']
+            if hit['device_category']:
+                device_data[url][hit['device_category']] += 1
+            if hit['page_title']:
+                title_data[url][hit['page_title']] += 1
+        
+        # Создаем/обновляем PageMetrics батчами
+        metrics_to_create = []
+        for stat in page_stats:
+            url = stat['url']
+            total_views = stat['total_views']
+            exit_rate = (stat['exit_count'] / total_views * 100) if total_views else 0
+            
+            # Берем самый частый device и title из предварительно собранных данных
+            dominant_device = max(device_data[url].items(), key=lambda x: x[1])[0] if device_data[url] else None
+            page_title = max(title_data[url].items(), key=lambda x: x[1])[0] if title_data[url] else None
+            
+            metrics_to_create.append(PageMetrics(
+                version=version,
+                url=url,
+                page_title=page_title,
+                total_views=total_views,
+                unique_visitors=stat['unique_visitors'],
+                avg_time_on_page=stat['avg_time'] or 0,
+                bounce_rate=0,
+                exit_rate=exit_rate,
+                avg_scroll_depth=stat['avg_scroll'],
+                dominant_device=dominant_device,
+                dominant_cohort=None,
+            ))
+        
+        # Bulk create/update (используем update_or_create для совместимости)
+        for metric in metrics_to_create:
+            PageMetrics.objects.update_or_create(
+                version=metric.version,
+                url=metric.url,
+                defaults={
+                    'page_title': metric.page_title,
+                    'total_views': metric.total_views,
+                    'unique_visitors': metric.unique_visitors,
+                    'avg_time_on_page': metric.avg_time_on_page,
+                    'bounce_rate': metric.bounce_rate,
+                    'exit_rate': metric.exit_rate,
+                    'avg_scroll_depth': metric.avg_scroll_depth,
+                    'dominant_device': metric.dominant_device,
+                }
+            )
+        
+        self.stdout.write(f"Calculated metrics for {len(page_stats)} pages.")
+
+    def update_page_metrics_cohorts(self, version):
+        """Обновляет dominant_cohort в PageMetrics после создания когорт (оптимизированная версия)"""
+        from analytics.models import PageMetrics, UserCohort
+        
+        # Берем самую большую когорту как приближение для всех страниц
+        # (более точное определение требует сложной логики связывания client_id)
+        cohorts = UserCohort.objects.filter(version=version).order_by('-percentage')
+        
+        if cohorts.exists():
+            dominant_cohort = cohorts.first().name
+            # Bulk update всех страниц сразу
+            PageMetrics.objects.filter(version=version).update(dominant_cohort=dominant_cohort)
+            self.stdout.write(f"Updated dominant_cohort for all pages (using '{dominant_cohort}').")
+        else:
+            self.stdout.write("No cohorts found, skipping dominant_cohort update.")
+
     def run_analysis(self, version, df_hits, df_visits):
-        # ... (Previous logic for Rage Clicks, Bounce, Loops - Kept as is)
+        """Запускает анализ UX-проблем с AI-гипотезами"""
         self.stdout.write("Running UX Analysis...")
         issues = []
+
+        def normalize_issue_url(raw_url):
+            """
+            Collapse noisy params (referer/utm/etc) and trailing slashes so the same page
+            does not create multiple issues due to query strings or mixed schemes.
+            """
+            if not isinstance(raw_url, str):
+                return ""
+            parsed = urllib.parse.urlparse(raw_url.strip())
+            netloc = parsed.netloc.lower()
+            path = (parsed.path or "/").rstrip("/") or "/"
+            query_dict = urllib.parse.parse_qs(parsed.query, keep_blank_values=False)
+            for noisy in ['referer', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'yclid', '_openstat', 'from', 'ref']:
+                query_dict.pop(noisy, None)
+            clean_query = urllib.parse.urlencode({k: v[0] if len(v) == 1 else v for k, v in query_dict.items()}, doseq=True)
+            scheme = parsed.scheme.lower() if parsed.scheme else ("https" if netloc else "")
+            if netloc or scheme:
+                return urllib.parse.urlunparse((scheme, netloc, path, '', clean_query, ''))
+            return path + (f"?{clean_query}" if clean_query else "")
+
+        def pick_representative_url(df, norm_column, norm_value):
+            """Return the most frequent raw URL for a normalized value to fetch PageMetrics."""
+            subset = df[df[norm_column] == norm_value]['ym:pv:URL'].dropna()
+            if subset.empty:
+                return norm_value
+            return subset.mode().iloc[0]
 
         # A. Rage Clicks Detection
         df_hits['timestamp'] = pd.to_datetime(df_hits['ym:pv:dateTime'], utc=True)
@@ -209,26 +515,36 @@ class Command(BaseCommand):
         rage_clicks = df_hits_sorted[
             (df_hits_sorted['time_diff'] < 2) & 
             (df_hits_sorted['ym:pv:URL'] == df_hits_sorted['prev_url'])
-        ]
+        ].copy()
         
         if not rage_clicks.empty:
-            rage_stats = rage_clicks['ym:pv:URL'].value_counts().head(5)
-            for url, count in rage_stats.items():
-                # self.stdout.write(f"DEBUG: Found Rage Click on {url} ({count})")
+            rage_clicks['norm_url'] = rage_clicks['ym:pv:URL'].apply(normalize_issue_url)
+            rage_stats = rage_clicks['norm_url'].value_counts().head(5)
+            for norm_url, count in rage_stats.items():
+                if not norm_url:
+                    continue
+                representative_url = pick_representative_url(rage_clicks, 'norm_url', norm_url)
+                page_metrics = PageMetrics.objects.filter(version=version, url=representative_url).first()
+                if not page_metrics:
+                    page_metrics = PageMetrics.objects.filter(version=version, url=norm_url).first()
                 impact = min(count * 0.1, 10.0)
-                trend = self._calculate_trend('RAGE_CLICK', url, impact)
+                trend = self._calculate_trend('RAGE_CLICK', norm_url, impact)
                 priority = self._calculate_priority('WARNING', impact, count, trend)
                 ai_text = analyze_issue_with_ai(
                      issue_type='RAGE_CLICK',
-                     location=url,
-                     metrics_context=f"Количество событий: {count}"
+                     location=norm_url,
+                     metrics_context=f"Количество событий: {count}",
+                     page_title=page_metrics.page_title if page_metrics else None,
+                     page_metrics={'avg_time': page_metrics.avg_time_on_page if page_metrics else None} if page_metrics else None,
+                     dominant_cohort=page_metrics.dominant_cohort if page_metrics else None,
+                     dominant_device=page_metrics.dominant_device if page_metrics else None
                  )
                 issues.append(UXIssue(
                     version=version,
                     issue_type='RAGE_CLICK',
                     severity='WARNING',
                     description=f"Detected {count} rapid reloads/clicks on this page.",
-                    location_url=url,
+                    location_url=norm_url,
                     affected_sessions=count,
                     impact_score=impact,
                     ai_hypothesis=ai_text,
@@ -238,57 +554,38 @@ class Command(BaseCommand):
                     recommended_specialists=self._recommend_specialists('RAGE_CLICK')
                 ))
 
-        # B. High Bounce Rate
-        bounced_visits = df_visits[df_visits['ym:s:visitDuration'] < 15]['ym:s:clientID']
-        bounced_hits = df_hits[df_hits['ym:pv:clientID'].isin(bounced_visits)]
-        
-        if not bounced_hits.empty:
-            bounce_stats = bounced_hits['ym:pv:URL'].value_counts().head(5)
-            for url, count in bounce_stats.items():
-                 impact = min(count * 0.2, 10.0)
-                 trend = self._calculate_trend('HIGH_BOUNCE', url, impact)
-                 priority = self._calculate_priority('CRITICAL', impact, count, trend)
-                 ai_text = analyze_issue_with_ai(
-                     issue_type='HIGH_BOUNCE',
-                     location=url,
-                     metrics_context=f"Количество отказов: {count}"
-                 )
-                 issues.append(UXIssue(
-                    version=version,
-                    issue_type='HIGH_BOUNCE',
-                    severity='CRITICAL',
-                    description=f"High bounce rate detected. {count} users left immediately.",
-                    location_url=url,
-                    affected_sessions=count,
-                    impact_score=impact,
-                    ai_hypothesis=ai_text,
-                    detected_version_name=version.name,
-                    trend=trend,
-                    priority=priority,
-                    recommended_specialists=self._recommend_specialists('HIGH_BOUNCE')
-                 ))
+        nav_back_targets = set()
 
-        # C. Loops
-        loop_counts = df_hits.groupby(['ym:pv:clientID', 'ym:pv:URL']).size()
+        # B. Loops
+        df_hits['norm_url'] = df_hits['ym:pv:URL'].apply(normalize_issue_url)
+        loop_counts = df_hits[df_hits['norm_url'] != ""].groupby(['ym:pv:clientID', 'norm_url']).size()
         loops = loop_counts[loop_counts > 3]
         
         if not loops.empty:
-            loop_urls = loops.index.get_level_values('ym:pv:URL').value_counts().head(5)
-            for url, count in loop_urls.items():
+            loop_urls = loops.index.get_level_values('norm_url').value_counts().head(5)
+            for norm_url, count in loop_urls.items():
+                if not norm_url:
+                    continue
+                nav_back_targets.add(norm_url)
+                page_metrics = PageMetrics.objects.filter(version=version, url=norm_url).first()
                 impact = min(count * 0.15, 10.0)
-                trend = self._calculate_trend('LOOPING', url, impact)
+                trend = self._calculate_trend('LOOPING', norm_url, impact)
                 priority = self._calculate_priority('WARNING', impact, count, trend)
                 ai_text = analyze_issue_with_ai(
                      issue_type='LOOPING',
-                     location=url,
-                     metrics_context=f"Количество зацикливаний: {count}"
+                     location=norm_url,
+                     metrics_context=f"Количество зацикливаний: {count}",
+                     page_title=page_metrics.page_title if page_metrics else None,
+                     page_metrics={'avg_time': page_metrics.avg_time_on_page if page_metrics else None} if page_metrics else None,
+                     dominant_cohort=page_metrics.dominant_cohort if page_metrics else None,
+                     dominant_device=page_metrics.dominant_device if page_metrics else None
                  )
                 issues.append(UXIssue(
                     version=version,
                     issue_type='LOOPING',
                     severity='WARNING',
                     description=f"Users keep returning to this page ({count} loop events).",
-                    location_url=url,
+                    location_url=norm_url,
                     affected_sessions=count,
                     impact_score=impact,
                     ai_hypothesis=ai_text,
@@ -297,6 +594,267 @@ class Command(BaseCommand):
                     priority=priority,
                     recommended_specialists=self._recommend_specialists('LOOPING')
                 ))
+
+        # C. WANDERING (Блуждание) - сессии с >10 просмотрами, но без целей
+        if 'ym:s:goalsID' in df_visits.columns:
+            wandering_visits = df_visits[
+                (df_visits['ym:s:pageViews'] > 10) & 
+                (df_visits['ym:s:goalsID'].isna() | (df_visits['ym:s:goalsID'].astype(str) == '[]'))
+            ].copy()
+            
+            if not wandering_visits.empty:
+                wandering_visits['norm_start_url'] = wandering_visits['ym:s:startURL'].apply(normalize_issue_url)
+                wandering_by_page = wandering_visits.groupby('norm_start_url').size()
+                for entry_page, count in wandering_by_page.head(5).items():
+                    if not entry_page:
+                        continue
+                    # Получаем метрики страницы
+                    page_metrics = PageMetrics.objects.filter(version=version, url=entry_page).first()
+                    avg_depth = wandering_visits[wandering_visits['norm_start_url'] == entry_page]['ym:s:pageViews'].mean()
+                    metrics_context = f"Количество сессий: {count}, Средняя глубина: {avg_depth:.1f}"
+                    
+                    ai_text = analyze_issue_with_ai(
+                        issue_type='WANDERING',
+                        location=entry_page,
+                        metrics_context=metrics_context,
+                        page_title=page_metrics.page_title if page_metrics else None,
+                        page_metrics={'avg_time': page_metrics.avg_time_on_page if page_metrics else None,
+                                     'exit_rate': page_metrics.exit_rate if page_metrics else None} if page_metrics else None,
+                        dominant_cohort=page_metrics.dominant_cohort if page_metrics else None,
+                        dominant_device=page_metrics.dominant_device if page_metrics else None
+                    )
+                    issues.append(UXIssue(
+                        version=version,
+                        issue_type='WANDERING',
+                        severity='WARNING',
+                        description=f"Users wander through {avg_depth:.1f} pages on average without achieving goals.",
+                        location_url=entry_page,
+                        affected_sessions=count,
+                        impact_score=min(count * 0.1, 10.0),
+                        ai_hypothesis=ai_text
+                    ))
+
+        # D. NAVIGATION_BACK (Частое использование "Назад")
+        df_hits_sorted = df_hits.sort_values(['ym:pv:clientID', 'ym:pv:dateTime'])
+        if not df_hits_sorted.empty:
+            def canonical_loop_key(path_tuple):
+                """
+                Сводит петли к канонической форме, чтобы A->B->A и B->A->B считались одним паттерном.
+                Для двувершинных циклов сортируем вершины; для остальных оставляем как есть.
+                """
+                unique_nodes = set(path_tuple)
+                if len(unique_nodes) == 2:
+                    return tuple(sorted(unique_nodes))
+                return path_tuple
+
+            def canonical_loop_display(path_tuple):
+                """Возвращает детерминированное отображение для канонического ключа."""
+                unique_nodes = set(path_tuple)
+                if len(unique_nodes) == 2:
+                    a, b = sorted(unique_nodes)
+                    return f"{a} -> {b} -> {a}"
+                return " -> ".join(path_tuple)
+
+            # Собираем навигационные циклы 2-3 страниц, чтобы не плодить дубликаты issues
+            loop_events = []
+            for client_id, group in df_hits_sorted.groupby('ym:pv:clientID'):
+                urls = group['ym:pv:URL'].tolist()
+                for idx in range(len(urls)):
+                    for window in (2, 3):  # A->B->A and A->B->C->A
+                        if idx >= window:
+                            seq = urls[idx-window:idx+1]
+                            norm_seq = [normalize_issue_url(u) for u in seq]
+                            if norm_seq[0] and norm_seq[-1] and norm_seq[0] == norm_seq[-1] and len(set(norm_seq)) > 1:
+                                key = canonical_loop_key(tuple(norm_seq))
+                                display = canonical_loop_display(tuple(norm_seq))
+                                loop_events.append((key, display, client_id))
+
+            if loop_events:
+                from collections import defaultdict
+                path_counts = defaultdict(int)
+                path_users = defaultdict(set)
+                path_display = {}
+                for path_key, display_path, client_id in loop_events:
+                    path_counts[path_key] += 1
+                    path_users[path_key].add(client_id)
+                    if path_key not in path_display:
+                        path_display[path_key] = display_path
+
+                top_loops = sorted(path_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+                for path_key, pattern_count in top_loops:
+                    loop_path = path_display.get(path_key, " -> ".join(path_key))
+                    users_count = len(path_users[path_key])
+                    # Берем вторую страницу как проблемную точку для метрик, если есть
+                    target_url = path_key[1] if len(path_key) > 1 else path_key[0]
+                    nav_back_targets.add(target_url)
+                    page_metrics = PageMetrics.objects.filter(version=version, url=target_url).first()
+                    metrics_context = f"Навигационный цикл: {loop_path}. Повторений: {pattern_count}, пользователей: {users_count}"
+                    impact = min(pattern_count * 0.12, 10.0)
+                    trend = self._calculate_trend('NAVIGATION_BACK', loop_path, impact)
+                    priority = self._calculate_priority('WARNING', impact, users_count, trend)
+
+                    ai_text = analyze_issue_with_ai(
+                        issue_type='NAVIGATION_BACK',
+                        location=loop_path,
+                        metrics_context=metrics_context,
+                        page_title=page_metrics.page_title if page_metrics else None,
+                        page_metrics={'avg_time': page_metrics.avg_time_on_page if page_metrics else None} if page_metrics else None,
+                        dominant_cohort=page_metrics.dominant_cohort if page_metrics else None,
+                        dominant_device=page_metrics.dominant_device if page_metrics else None
+                    )
+                    issues.append(UXIssue(
+                        version=version,
+                        issue_type='NAVIGATION_BACK',
+                        severity='WARNING',
+                        description=f"Users bounce through loop {loop_path} ({pattern_count} back patterns, {users_count} users).",
+                        location_url=loop_path,
+                        affected_sessions=users_count,
+                        impact_score=impact,
+                        ai_hypothesis=ai_text,
+                        detected_version_name=version.name,
+                        trend=trend,
+                        priority=priority,
+                        recommended_specialists=self._recommend_specialists('LOOPING')
+                    ))
+
+        # E. HIGH_BOUNCE после учета back-циклов: если страница уже в back loop, не плодим дубль
+        bounced_visits = df_visits[df_visits['ym:s:visitDuration'] < 15]['ym:s:clientID']
+        bounced_hits = df_hits[df_hits['ym:pv:clientID'].isin(bounced_visits)].copy()
+        
+        if not bounced_hits.empty:
+            bounced_hits['norm_url'] = bounced_hits['ym:pv:URL'].apply(normalize_issue_url)
+            bounce_stats = bounced_hits['norm_url'].value_counts().head(5)
+            for norm_url, count in bounce_stats.items():
+                 if not norm_url:
+                     continue
+                 if norm_url in nav_back_targets:
+                     continue  # уже покрыто back-loop проблемой
+                 representative_url = pick_representative_url(bounced_hits, 'norm_url', norm_url)
+                 page_metrics = PageMetrics.objects.filter(version=version, url=representative_url).first()
+                 if not page_metrics:
+                     page_metrics = PageMetrics.objects.filter(version=version, url=norm_url).first()
+                 impact = min(count * 0.2, 10.0)
+                 trend = self._calculate_trend('HIGH_BOUNCE', norm_url, impact)
+                 priority = self._calculate_priority('CRITICAL', impact, count, trend)
+                 ai_text = analyze_issue_with_ai(
+                     issue_type='HIGH_BOUNCE',
+                     location=norm_url,
+                     metrics_context=f"Количество отказов: {count}",
+                     page_title=page_metrics.page_title if page_metrics else None,
+                     page_metrics={'exit_rate': page_metrics.exit_rate if page_metrics else None,
+                                  'avg_time': page_metrics.avg_time_on_page if page_metrics else None} if page_metrics else None,
+                     dominant_cohort=page_metrics.dominant_cohort if page_metrics else None,
+                     dominant_device=page_metrics.dominant_device if page_metrics else None
+                 )
+                 issues.append(UXIssue(
+                    version=version,
+                    issue_type='HIGH_BOUNCE',
+                    severity='CRITICAL',
+                    description=f"High bounce rate detected. {count} users left immediately.",
+                    location_url=norm_url,
+                    affected_sessions=count,
+                    impact_score=impact,
+                    ai_hypothesis=ai_text,
+                    detected_version_name=version.name,
+                    trend=trend,
+                    priority=priority,
+                    recommended_specialists=self._recommend_specialists('HIGH_BOUNCE')
+                ))
+
+        # F. FORM_FIELD_ERRORS (Ошибки ввода в формах)
+        form_pattern = r'/form|/apply|/request|/anket|/zayav'
+        form_hits = df_hits[df_hits['ym:pv:URL'].astype(str).str.contains(form_pattern, na=False, regex=True)]
+        
+        if not form_hits.empty:
+            # Группируем по clientID, считаем время на форме
+            form_sessions = form_hits.groupby('ym:pv:clientID').agg({
+                'ym:pv:dateTime': ['min', 'max'],
+                'ym:pv:URL': 'first'
+            })
+            form_sessions.columns = ['min_time', 'max_time', 'url']
+            form_sessions['duration'] = (form_sessions['max_time'] - form_sessions['min_time']).dt.total_seconds()
+            
+            # Долго на форме (>60 сек) и нет цели
+            long_form = form_sessions[form_sessions['duration'] > 60]
+            if not long_form.empty:
+                long_form_clients = long_form.index
+                # Проверяем, есть ли у этих пользователей goals
+                if 'ym:s:goalsID' in df_visits.columns:
+                    has_goals = df_visits[
+                        df_visits['ym:s:clientID'].isin(long_form_clients) & 
+                        ~df_visits['ym:s:goalsID'].isna() &
+                        (df_visits['ym:s:goalsID'].astype(str) != '[]')
+                    ]
+                    problem_clients = set(long_form_clients) - set(has_goals['ym:s:clientID'])
+                else:
+                    problem_clients = set(long_form_clients)
+                
+                if problem_clients:
+                    form_urls = long_form[long_form.index.isin(problem_clients)]['url'].value_counts().head(5)
+                    for url, count in form_urls.items():
+                        norm_url = normalize_issue_url(url)
+                        page_metrics = PageMetrics.objects.filter(version=version, url=norm_url or url).first()
+                        avg_duration = long_form[long_form['url'] == url]['duration'].mean()
+                        metrics_context = f"Количество проблемных сессий: {count}, Среднее время на форме: {avg_duration:.1f} сек"
+                        
+                        ai_text = analyze_issue_with_ai(
+                            issue_type='FORM_FIELD_ERRORS',
+                            location=norm_url or url,
+                            metrics_context=metrics_context,
+                            page_title=page_metrics.page_title if page_metrics else None,
+                            page_metrics={'avg_time': avg_duration} if page_metrics else None,
+                            dominant_cohort=page_metrics.dominant_cohort if page_metrics else None,
+                            dominant_device=page_metrics.dominant_device if page_metrics else None
+                        )
+                        issues.append(UXIssue(
+                            version=version,
+                            issue_type='FORM_FIELD_ERRORS',
+                            severity='WARNING',
+                            description=f"Users spend {avg_duration:.1f}s on form but don't submit ({count} sessions).",
+                            location_url=norm_url or url,
+                            affected_sessions=count,
+                            impact_score=min(count * 0.15, 10.0),
+                            ai_hypothesis=ai_text
+                        ))
+
+        # G. FUNNEL_DROPOFF (Критические точки отказа в воронках)
+        # Для приемной комиссии: определяем популярные пути
+        funnel_steps = ['/', '/lists', '/rating', '/apply']  # Пример для приемной комиссии
+        
+        for i in range(len(funnel_steps) - 1):
+            step1_url = funnel_steps[i]
+            step2_url = funnel_steps[i+1]
+            
+            step1_users = set(df_hits[df_hits['ym:pv:URL'] == step1_url]['ym:pv:clientID'])
+            step2_users = set(df_hits[df_hits['ym:pv:URL'] == step2_url]['ym:pv:clientID'])
+            
+            if step1_users:
+                conversion = len(step2_users & step1_users) / len(step1_users)
+                
+                if conversion < 0.3:  # <30% конверсия = критическая точка
+                    lost_users = len(step1_users) - len(step2_users & step1_users)
+                    page_metrics = PageMetrics.objects.filter(version=version, url=step1_url).first()
+                    metrics_context = f"Конверсия {step1_url} -> {step2_url}: {conversion*100:.1f}%, Потеряно пользователей: {lost_users}"
+                    
+                    ai_text = analyze_issue_with_ai(
+                        issue_type='FUNNEL_DROPOFF',
+                        location=step1_url,
+                        metrics_context=metrics_context,
+                        page_title=page_metrics.page_title if page_metrics else None,
+                        page_metrics={'exit_rate': page_metrics.exit_rate if page_metrics else None} if page_metrics else None,
+                        dominant_cohort=page_metrics.dominant_cohort if page_metrics else None,
+                        dominant_device=page_metrics.dominant_device if page_metrics else None
+                    )
+                    issues.append(UXIssue(
+                        version=version,
+                        issue_type='FUNNEL_DROPOFF',
+                        severity='CRITICAL',
+                        description=f"Critical drop-off: only {conversion*100:.1f}% proceed from {step1_url} to {step2_url}.",
+                        location_url=step1_url,
+                        affected_sessions=lost_users,
+                        impact_score=min(lost_users * 0.2, 10.0),
+                        ai_hypothesis=ai_text
+                    ))
 
         UXIssue.objects.bulk_create(issues)
         self.stdout.write(f"Detected {len(issues)} UX issues.")

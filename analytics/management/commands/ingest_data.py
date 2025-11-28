@@ -75,6 +75,11 @@ class Command(BaseCommand):
                 visits_columns.remove('ym:s:goalsID')
                 df_visits = pd.read_parquet(visits_path, columns=visits_columns)
 
+            # Ensure timestamps are timezone-aware (UTC) to avoid Django naive datetime warnings
+            df_visits['ym:s:dateTime'] = pd.to_datetime(df_visits['ym:s:dateTime'], utc=True, errors='coerce')
+            # Normalize client IDs to string for consistent joins with hits
+            df_visits['client_id_norm'] = df_visits['ym:s:clientID'].astype(str)
+            df_visits['ym:s:clientID'] = df_visits['client_id_norm']
             self.stdout.write(f"DEBUG: Visits loaded. Shape: {df_visits.shape}")
             
             # Hits columns
@@ -82,6 +87,9 @@ class Command(BaseCommand):
                 'ym:pv:clientID', 'ym:pv:dateTime', 'ym:pv:URL', 'ym:pv:title'
             ]
             df_hits = pd.read_parquet(hits_path, columns=hits_columns)
+            df_hits['ym:pv:dateTime'] = pd.to_datetime(df_hits['ym:pv:dateTime'], utc=True, errors='coerce')
+            df_hits['client_id_norm'] = df_hits['ym:pv:clientID'].astype(str)
+            df_hits['ym:pv:clientID'] = df_hits['client_id_norm']
             self.stdout.write(f"DEBUG: Hits loaded. Shape: {df_hits.shape}")
 
             # 3. Process Visits (Sessions)
@@ -91,8 +99,8 @@ class Command(BaseCommand):
             if len(df_visits) > 10000:
                 self.stdout.write(f"Sampling 10k visits from {len(df_visits)}...")
                 df_visits = df_visits.head(10000)
-                client_ids = df_visits['ym:s:clientID'].unique()
-                df_hits = df_hits[df_hits['ym:pv:clientID'].isin(client_ids)]
+                client_ids = df_visits['client_id_norm'].unique()
+                df_hits = df_hits[df_hits['client_id_norm'].isin(client_ids)]
 
             # Bulk Create Sessions
             visit_objects = []
@@ -100,7 +108,7 @@ class Command(BaseCommand):
             
             for _, row in df_visits.iterrows():
                 v_id = str(row.get('ym:s:visitID', ''))
-                c_id = str(row.get('ym:s:clientID', ''))
+                c_id = str(row.get('client_id_norm', ''))
                 
                 visit = VisitSession(
                     version=version,
@@ -127,7 +135,7 @@ class Command(BaseCommand):
             self.stdout.write("Processing Hits...")
             hit_objects = []
             for _, row in df_hits.iterrows():
-                c_id = str(row.get('ym:pv:clientID', ''))
+                c_id = str(row.get('client_id_norm', ''))
                 if c_id in client_to_visit_pk:
                     hit = PageHit(
                         session_id=client_to_visit_pk[c_id],
@@ -163,7 +171,7 @@ class Command(BaseCommand):
         issues = []
 
         # A. Rage Clicks Detection
-        df_hits['timestamp'] = pd.to_datetime(df_hits['ym:pv:dateTime'])
+        df_hits['timestamp'] = pd.to_datetime(df_hits['ym:pv:dateTime'], utc=True)
         df_hits_sorted = df_hits.sort_values(['ym:pv:clientID', 'timestamp'])
         df_hits_sorted['time_diff'] = df_hits_sorted.groupby('ym:pv:clientID')['timestamp'].diff().dt.total_seconds()
         df_hits_sorted['prev_url'] = df_hits_sorted.groupby('ym:pv:clientID')['ym:pv:URL'].shift()
@@ -318,7 +326,32 @@ class Command(BaseCommand):
         # Fill NaNs
         user_behavior = user_behavior.fillna(0)
 
+        # 2c. Interest features from URLs (to split users by intent: списки/новости/контакты/поступление)
+        self.stdout.write("Deriving interest intents from URLs...")
+        url_df = df_hits[['ym:pv:clientID', 'ym:pv:URL']].copy()
+        url_df['url_lower'] = url_df['ym:pv:URL'].astype(str).str.lower()
+
+        interest_map = {
+            'interest_rating': ['rating', 'spis', 'rank'],
+            'interest_news': ['news', 'novosti', 'press'],
+            'interest_contacts': ['contact', 'kontak'],
+            'interest_admission': ['apply', 'priem', 'postup', 'admission'],
+            'interest_forms': ['form', 'anket', 'request'],
+            'interest_programs': ['program', 'napravlen', 'course'],
+        }
+
+        for col, keywords in interest_map.items():
+            pattern = "|".join(keywords)
+            matched_clients = url_df[url_df['url_lower'].str.contains(pattern, na=False)]['ym:pv:clientID'].unique()
+            user_behavior[col] = 0
+            if len(matched_clients):
+                user_behavior.loc[user_behavior.index.isin(matched_clients), col] = 1
+
         # 3. Clustering (ML)
+        if user_behavior.empty:
+            self.stdout.write("No users to segment.")
+            return
+
         self.stdout.write("Running K-Means...")
         scaler = StandardScaler()
         # Select features: standard metrics + all goal columns
@@ -326,16 +359,23 @@ class Command(BaseCommand):
         # Add goal columns to clustering features? 
         # Ideally yes, so we separate "Buyers" from "Readers"
         goal_cols = [c for c in user_behavior.columns if c.startswith('goal_')]
-        feature_cols += goal_cols
+        interest_cols = [c for c in user_behavior.columns if c.startswith('interest_')]
+        feature_cols += goal_cols + interest_cols
         
         X = scaler.fit_transform(user_behavior[feature_cols])
         
-        n_clusters = 4
+        # More granular cohorts: choose up to 8 clusters, but never exceed user count
+        # Aim for more segments: ~1 per 30 users, between 5 and 10 where possible
+        n_clusters = min(10, max(5, len(user_behavior)//30 or 5))
+        n_clusters = min(n_clusters, len(user_behavior))
+        if n_clusters < 2:
+            n_clusters = 1
         kmeans = KMeans(n_clusters=n_clusters, random_state=42)
         user_behavior['cluster'] = kmeans.fit_predict(X)
         
         # 4. Save & Name Cohorts (AI)
         UserCohort.objects.filter(version=version).delete()
+        base_name_counts = {}
         
         for cluster_id in range(n_clusters):
             cluster_data = user_behavior[user_behavior['cluster'] == cluster_id]
@@ -355,16 +395,54 @@ class Command(BaseCommand):
                     if rate > 0.05: # 5% threshold for "significant" goal
                         top_goals.append(f"{gc.replace('goal_', '')}({int(rate*100)}%)")
 
+            # Interest breakdown (which URL intents dominate this cluster)
+            interest_labels = {
+                'rating': 'рейтинги',
+                'news': 'новости',
+                'contacts': 'контакты',
+                'admission': 'поступление',
+                'forms': 'формы',
+                'programs': 'программы'
+            }
+            interest_rates = []
+            for ic in interest_cols:
+                rate = cluster_data[ic].mean()
+                if rate > 0:
+                    code = ic.replace('interest_', '')
+                    interest_rates.append((code, rate))
+            interest_rates.sort(key=lambda x: x[1], reverse=True)
+            top_interest_codes = [c for c, _ in interest_rates[:3]]
+            interest_summary = []
+            for code, rate in interest_rates[:3]:
+                label = interest_labels.get(code, code)
+                interest_summary.append(f"{label} ({int(rate*100)}%)")
+            top_interests = ", ".join(interest_summary) if interest_summary else "None"
+            primary_interest_label = interest_labels.get(top_interest_codes[0], "без яркого интереса") if top_interest_codes else "без яркого интереса"
+            primary_goal_label = top_goals[0] if top_goals else "без целей"
+
             # Prepare metrics for DB and AI
             metrics_dict = {
                 'bounce': round(avg_bounce * 100, 1),
                 'duration': int(avg_duration),
                 'depth': round(avg_depth, 1),
-                'top_goals': ", ".join(top_goals) if top_goals else "None"
+                'top_goals': ", ".join(top_goals) if top_goals else "None",
+                'top_interests': top_interests,
+                'interest_codes': top_interest_codes,
             }
             
             # AI Naming
-            cohort_name = generate_cohort_name(metrics_dict)
+            base_name = generate_cohort_name(metrics_dict) or "Целевая группа"
+            # Add deterministic descriptor to avoid collisions and clarify intent
+            detail_bits = []
+            if primary_interest_label and primary_interest_label != "без яркого интереса":
+                detail_bits.append(primary_interest_label)
+            if primary_goal_label and primary_goal_label != "без целей":
+                detail_bits.append(primary_goal_label)
+            if detail_bits:
+                base_name = f"{base_name} — {', '.join(detail_bits)}"
+            count = base_name_counts.get(base_name, 0) + 1
+            base_name_counts[base_name] = count
+            cohort_name = f"{base_name} #{count}"
             
             UserCohort.objects.create(
                 version=version,

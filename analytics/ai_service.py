@@ -67,11 +67,16 @@ def analyze_issue_with_ai(issue_type, location, metrics_context):
     Требования к ответу:
     - Без вступлений и извинений.
     - Две строки, каждая начинается с маркера: "Гипотеза:" и "Исправить:".
-    - Гипотеза: конкретная причина с привязкой к данным.
-    - Исправить: одно практическое действие (UI/копирайт/поток/тех), не длиннее 140 символов.
+    - Гипотеза: конкретная причина с привязкой к данным (не общая формулировка).
+    - Исправить: конкретное изменение UI/контента/логики. Запрещены советы вида "проверить/отладить/исправить", упоминания кнопок "Назад/Вперед" и абстрактные формулировки. Пиши действие, которое сразу внедряется: добавить заметный CTA/редирект, вынести целевую ссылку из фильтра, упростить путь, укоротить форму, заменить мертвый линк.
+    - Избегай дублирования причины в блоке "Исправить".
+    - Длина блока "Исправить" до 140 символов.
     """
     
-    system_text = "Ты главный UX-аналитик в финтех-команде. Отвечай четко, по делу, без воды."
+    system_text = (
+        "Ты главный UX-аналитик в финтех-команде. Отвечай четко, без воды и без QA-советов, "
+        "давай конкретные продуктовые изменения (CTA, навигация, редиректы, тексты, форма)."
+    )
     
     result = _send_gpt_request(system_text, prompt_content)
     return result if result else generate_stub_hypothesis(issue_type)
@@ -79,8 +84,11 @@ def analyze_issue_with_ai(issue_type, location, metrics_context):
 def generate_cohort_name(metrics_dict):
     """
     Генерирует название для когорты пользователей на основе их метрик.
-    metrics_dict: {'bounce': 80.5, 'duration': 12, 'depth': 1.2, 'top_goals': '...'}
+    metrics_dict: {'bounce': 80.5, 'duration': 12, 'depth': 1.2, 'top_goals': '...', 'top_interests': '...', 'interest_codes': [...]}
     """
+    top_interests = metrics_dict.get('top_interests', 'None')
+    primary_interest = (metrics_dict.get('interest_codes') or [None])[0] or "None"
+    primary_goal = (metrics_dict.get('top_goals') or "None").split(",")[0].strip() or "None"
     prompt_content = f"""
     Ты маркетолог-аналитик. Придумай название для сегмента пользователей веб-сайта вуза.
     Метрики сегмента:
@@ -88,24 +96,41 @@ def generate_cohort_name(metrics_dict):
     - Время на сайте: {metrics_dict.get('duration')} сек
     - Глубина просмотра: {metrics_dict.get('depth')} стр
     - Достигнутые цели (конверсии): {metrics_dict.get('top_goals')}
+    - Основные интересы по URL: {top_interests}
+    - Главный интерес: {primary_interest}. Главная цель: {primary_goal}
     
-    Задача: Дай короткое, емкое название (2-4 слова) для этой группы, описывающее их поведение. 
-    Примеры: "Случайные прохожие", "Заинтересованные абитуриенты", "Нетерпимые мобильные пользователи".
+    Задача: Дай короткое, емкое название (2-4 слова), описывающее намерение и объект интереса/цель. Используй главный интерес/цель в названии, избегай общих фраз. Примеры: "Ищут рейтинги", "Читатели новостей", "Ищут контакты", "Поступающие абитуриенты", "Заполняют формы". Без абстрактных слов.
     В ответе только название, без кавычек и лишнего текста.
     """
 
-    system_text = "Ты опытный маркетолог. Твоя задача - сегментация аудитории."
+    system_text = "Ты опытный маркетолог. Твоя задача - сегментация аудитории. Дай понятные названия по намерению, а не общие фразы."
     
     result = _send_gpt_request(system_text, prompt_content)
     
     if not result:
-        # Fallback name
-        if metrics_dict.get('bounce', 0) > 70:
-            return "High Bounce Users"
-        elif metrics_dict.get('duration', 0) > 60:
-            return "Engaged Users"
-        else:
-            return "Average Users"
+        # Rule-based fallback for clarity
+        bounce = metrics_dict.get('bounce', 0)
+        duration = metrics_dict.get('duration', 0)
+        depth = metrics_dict.get('depth', 0)
+        codes = metrics_dict.get('interest_codes', []) or []
+        if codes:
+            code = codes[0]
+            mapping = {
+                'rating': "Ищут рейтинги",
+                'news': "Читатели новостей",
+                'contacts': "Ищут контакты",
+                'admission': "Готовятся поступать",
+                'forms': "Заполняют формы",
+                'programs': "Изучают программы",
+            }
+            return mapping.get(code, "Целевая группа")
+        if bounce > 70 and duration < 20:
+            return "Быстро ушедшие"
+        if depth > 3 and duration > 60:
+            return "Глубокие исследователи"
+        if duration > 90 and bounce < 40:
+            return "Вовлечённые пользователи"
+        return "Целевая группа"
             
     return result.strip().replace('"', '').replace("'", "")
 

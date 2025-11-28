@@ -71,17 +71,17 @@
                         <div class="flex justify-between items-start mb-2">
                             <h5 class="font-bold text-gray-800 text-sm">{{ cohort.name }}</h5>
                             <span class="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded-full">
-                                {{ cohort.percentage|floatform:2 }}%
+                                {{ cohort.percentage|floatformat:2 }}%
                             </span>
                         </div>
                         <div class="grid grid-cols-3 gap-2 text-xs text-gray-500">
                             <div>
                                 <span class="block">Bounce</span>
-                                <span class="font-medium text-gray-700">{{ cohort.avg_bounce_rate|floatform:1 }}%</span>
+                                <span class="font-medium text-gray-700">{{ cohort.avg_bounce_rate|floatformat:1 }}%</span>
                             </div>
                             <div>
                                 <span class="block">Time</span>
-                                <span class="font-medium text-gray-700">{{ cohort.avg_duration|floatform:0 }}s</span>
+                                <span class="font-medium text-gray-700">{{ cohort.avg_duration|floatformat:0 }}s</span>
                             </div>
                              <div>
                                 <span class="block">Depth</span>
@@ -117,17 +117,17 @@
                         <div class="flex justify-between items-start mb-2">
                             <h5 class="font-bold text-gray-800 text-sm">{{ cohort.name }}</h5>
                             <span class="bg-indigo-100 text-indigo-700 text-xs px-2 py-1 rounded-full">
-                                {{ cohort.percentage|floatform:2 }}%
+                                {{ cohort.percentage|floatformat:2 }}%
                             </span>
                         </div>
                         <div class="grid grid-cols-3 gap-2 text-xs text-gray-500">
                             <div>
                                 <span class="block">Bounce</span>
-                                <span class="font-medium text-gray-700">{{ cohort.avg_bounce_rate|floatform:1 }}%</span>
+                                <span class="font-medium text-gray-700">{{ cohort.avg_bounce_rate|floatformat:1 }}%</span>
                             </div>
                             <div>
                                 <span class="block">Time</span>
-                                <span class="font-medium text-gray-700">{{ cohort.avg_duration|floatform:0 }}s</span>
+                                <span class="font-medium text-gray-700">{{ cohort.avg_duration|floatformat:0 }}s</span>
                             </div>
                             <div>
                                 <span class="block">Depth</span>
@@ -154,4 +154,3 @@
     {% endif %}
 </div>
 {% endblock %}
-

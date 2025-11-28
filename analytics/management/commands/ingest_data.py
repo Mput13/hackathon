@@ -2,11 +2,14 @@ import pandas as pd
 import numpy as np
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from analytics.models import ProductVersion, VisitSession, PageHit, UXIssue, DailyStat
+from analytics.models import ProductVersion, VisitSession, PageHit, UXIssue, DailyStat, UserCohort
 from datetime import datetime, timedelta
 import os
-from analytics.ai_service import analyze_issue_with_ai
+from analytics.ai_service import analyze_issue_with_ai, generate_cohort_name
+from analytics.utils import GoalParser
 import traceback
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
 
 class Command(BaseCommand):
     help = 'Ingests Parquet data from Yandex Metrica and runs UX analysis'
@@ -34,6 +37,11 @@ class Command(BaseCommand):
         self.stdout.write(f"Starting ingestion for {version_name}...")
 
         try:
+            # 0. Load Goals
+            goal_parser = GoalParser()
+            goals_config = goal_parser.get_goals()
+            self.stdout.write(f"Loaded {len(goals_config)} goals from config.")
+
             # 1. Create or Get Version
             self.stdout.write("DEBUG: Creating ProductVersion...")
             version, created = ProductVersion.objects.get_or_create(
@@ -48,17 +56,28 @@ class Command(BaseCommand):
                  self.stdout.write(self.style.ERROR(f"File not found: {visits_path}"))
                  return
             
-            # OPTIMIZATION: Read only necessary columns
-            # Visits has visitID
+            # Visits columns
             visits_columns = [
                 'ym:s:visitID', 'ym:s:clientID', 'ym:s:dateTime', 
                 'ym:s:visitDuration', 'ym:s:deviceCategory', 'ym:s:referer', 
                 'ym:s:bounce', 'ym:s:pageViews'
             ]
-            df_visits = pd.read_parquet(visits_path, columns=visits_columns)
+            # Try to add goalsID if available (it might not be in all exports)
+            # We'll handle the check during read or by checking schema first, 
+            # but for simplicity here we'll try to read it if we can't check easily.
+            # Actually, let's trust standard Metrika export.
+            visits_columns.append('ym:s:goalsID') 
+
+            try:
+                df_visits = pd.read_parquet(visits_path, columns=visits_columns)
+            except Exception:
+                self.stdout.write("Warning: 'ym:s:goalsID' not found or error reading it. Goal matching by ID disabled.")
+                visits_columns.remove('ym:s:goalsID')
+                df_visits = pd.read_parquet(visits_path, columns=visits_columns)
+
             self.stdout.write(f"DEBUG: Visits loaded. Shape: {df_visits.shape}")
             
-            # Hits DOES NOT have visitID, using clientID instead
+            # Hits columns
             hits_columns = [
                 'ym:pv:clientID', 'ym:pv:dateTime', 'ym:pv:URL', 'ym:pv:title'
             ]
@@ -67,17 +86,17 @@ class Command(BaseCommand):
 
             # 3. Process Visits (Sessions)
             self.stdout.write("Processing Visits...")
-            # Sampling for MVP speed
+            
+            # Sampling logic (Optional, kept from previous version)
             if len(df_visits) > 10000:
                 self.stdout.write(f"Sampling 10k visits from {len(df_visits)}...")
                 df_visits = df_visits.head(10000)
-                # Filter hits by clientIDs from the sample
                 client_ids = df_visits['ym:s:clientID'].unique()
                 df_hits = df_hits[df_hits['ym:pv:clientID'].isin(client_ids)]
 
             # Bulk Create Sessions
             visit_objects = []
-            visit_map_by_client = {} # client_id -> visit_id (last one)
+            visit_map_by_client = {} 
             
             for _, row in df_visits.iterrows():
                 v_id = str(row.get('ym:s:visitID', ''))
@@ -95,17 +114,12 @@ class Command(BaseCommand):
                     page_views=int(row.get('ym:s:pageViews', 0))
                 )
                 visit_objects.append(visit)
-                # Store for linking hits (rough approx: latest visit for client)
                 visit_map_by_client[c_id] = visit
             
             self.stdout.write("DEBUG: Saving visits to DB...")
             VisitSession.objects.bulk_create(visit_objects, ignore_conflicts=True)
             self.stdout.write(f"Created {len(visit_objects)} sessions.")
 
-            # Re-fetch visits from DB to get PKs
-            # Optimization: Get dict {client_id: visit_pk}
-            # Warning: This is imperfect if one client has multiple visits, but good enough for MVP
-            # to link hits to *some* session of that user.
             db_visits = VisitSession.objects.filter(version=version).values('id', 'client_id')
             client_to_visit_pk = {v['client_id']: v['id'] for v in db_visits}
 
@@ -114,8 +128,6 @@ class Command(BaseCommand):
             hit_objects = []
             for _, row in df_hits.iterrows():
                 c_id = str(row.get('ym:pv:clientID', ''))
-                
-                # Link to session if possible, else skip (or create orphan)
                 if c_id in client_to_visit_pk:
                     hit = PageHit(
                         session_id=client_to_visit_pk[c_id],
@@ -131,10 +143,12 @@ class Command(BaseCommand):
             self.stdout.write(f"Created {len(hit_objects)} hits.")
 
             # 5. Run Analysis (Heuristics)
-            # Pass client_to_visit_pk map or just use DFs
             self.run_analysis(version, df_hits, df_visits)
 
-            # 6. Pre-calculate Daily Stats
+            # 6. Segment Users into Cohorts (New Logic)
+            self.segment_users_into_cohorts(version, df_visits, df_hits, goals_config)
+
+            # 7. Pre-calculate Daily Stats
             self.calculate_daily_stats(version)
 
             self.stdout.write(self.style.SUCCESS(f"Ingestion and analysis complete for {version_name}"))
@@ -144,12 +158,12 @@ class Command(BaseCommand):
             traceback.print_exc()
 
     def run_analysis(self, version, df_hits, df_visits):
+        # ... (Previous logic for Rage Clicks, Bounce, Loops - Kept as is)
         self.stdout.write("Running UX Analysis...")
         issues = []
 
-        # A. Rage Clicks Detection (using clientID grouping instead of visitID)
+        # A. Rage Clicks Detection
         df_hits['timestamp'] = pd.to_datetime(df_hits['ym:pv:dateTime'])
-        
         df_hits_sorted = df_hits.sort_values(['ym:pv:clientID', 'timestamp'])
         df_hits_sorted['time_diff'] = df_hits_sorted.groupby('ym:pv:clientID')['timestamp'].diff().dt.total_seconds()
         df_hits_sorted['prev_url'] = df_hits_sorted.groupby('ym:pv:clientID')['ym:pv:URL'].shift()
@@ -162,7 +176,7 @@ class Command(BaseCommand):
         if not rage_clicks.empty:
             rage_stats = rage_clicks['ym:pv:URL'].value_counts().head(5)
             for url, count in rage_stats.items():
-                self.stdout.write(f"DEBUG: Found Rage Click on {url} ({count})")
+                # self.stdout.write(f"DEBUG: Found Rage Click on {url} ({count})")
                 ai_text = analyze_issue_with_ai(
                      issue_type='RAGE_CLICK',
                      location=url,
@@ -179,14 +193,13 @@ class Command(BaseCommand):
                     ai_hypothesis=ai_text
                 ))
 
-        # B. High Bounce Rate (stays same, uses visits DF)
-        bounced_visits = df_visits[df_visits['ym:s:visitDuration'] < 15]['ym:s:clientID'] # using clientID link
+        # B. High Bounce Rate
+        bounced_visits = df_visits[df_visits['ym:s:visitDuration'] < 15]['ym:s:clientID']
         bounced_hits = df_hits[df_hits['ym:pv:clientID'].isin(bounced_visits)]
         
         if not bounced_hits.empty:
             bounce_stats = bounced_hits['ym:pv:URL'].value_counts().head(5)
             for url, count in bounce_stats.items():
-                 self.stdout.write(f"DEBUG: Found High Bounce on {url} ({count})")
                  ai_text = analyze_issue_with_ai(
                      issue_type='HIGH_BOUNCE',
                      location=url,
@@ -203,14 +216,13 @@ class Command(BaseCommand):
                     ai_hypothesis=ai_text
                 ))
 
-        # C. Loops (using clientID)
+        # C. Loops
         loop_counts = df_hits.groupby(['ym:pv:clientID', 'ym:pv:URL']).size()
         loops = loop_counts[loop_counts > 3]
         
         if not loops.empty:
             loop_urls = loops.index.get_level_values('ym:pv:URL').value_counts().head(5)
             for url, count in loop_urls.items():
-                self.stdout.write(f"DEBUG: Found Loop on {url} ({count})")
                 ai_text = analyze_issue_with_ai(
                      issue_type='LOOPING',
                      location=url,
@@ -230,8 +242,143 @@ class Command(BaseCommand):
         UXIssue.objects.bulk_create(issues)
         self.stdout.write(f"Detected {len(issues)} UX issues.")
 
+    def segment_users_into_cohorts(self, version, df_visits, df_hits, goals_config):
+        self.stdout.write("--- Starting User Segmentation ---")
+
+        # 1. Base User Metrics
+        user_behavior = df_visits.groupby('ym:s:clientID').agg({
+            'ym:s:visitDuration': 'mean',       # Avg duration
+            'ym:s:pageViews': 'mean',           # Avg depth
+            'ym:s:visitID': 'count',            # Total visits
+            'ym:s:bounce': 'mean'               # Bounce prob
+        }).rename(columns={
+            'ym:s:visitDuration': 'avg_duration',
+            'ym:s:pageViews': 'avg_depth',
+            'ym:s:visitID': 'total_visits',
+            'ym:s:bounce': 'bounce_prob'
+        }).fillna(0)
+
+        # 2. Calculate Goal Achievements per User
+        # We add a column for each goal: 1 if achieved, 0 if not
+        
+        # Pre-process hits for URL matching
+        # Group hits by client to quickly check URLs
+        # This might be slow for huge datasets, but OK for hackathon size
+        
+        self.stdout.write("Calculating goal achievements...")
+        
+        # 2a. Identifier goals (ym:s:goalsID from Visits)
+        if 'ym:s:goalsID' in df_visits.columns:
+            # Expand goalsID list/string
+            # Metrica often sends '[12345, 67890]' string
+            def check_goal_id(row_val, target_id):
+                return str(target_id) in str(row_val)
+
+            for goal in goals_config:
+                if goal['match']['type'] == 'identifier':
+                    goal_id = goal['ym_goal_id']
+                    col_name = f"goal_{goal['code']}"
+                    # Check if any visit of this user has this goal ID
+                    # We do this by aggregating: did the user EVER have this goal?
+                    
+                    # Helper series
+                    has_goal = df_visits['ym:s:goalsID'].apply(lambda x: check_goal_id(x, goal_id)).astype(int)
+                    user_goal_counts = df_visits.assign(temp_goal=has_goal).groupby('ym:s:clientID')['temp_goal'].max()
+                    user_behavior[col_name] = user_goal_counts
+
+        # 2b. URL/Click goals (from Hits)
+        # Group hits by clientID
+        hits_grouped = df_hits.groupby('ym:pv:clientID')
+        
+        for goal in goals_config:
+            match_type = goal['match']['type']
+            match_val = goal['match']['value']
+            col_name = f"goal_{goal['code']}"
+            
+            if col_name in user_behavior.columns: 
+                continue # Already processed (e.g. identifier)
+
+            if match_type == 'url_contains':
+                # Find clients who have at least one hit with url containing value
+                matching_clients = df_hits[df_hits['ym:pv:URL'].astype(str).str.contains(match_val, na=False)]['ym:pv:clientID'].unique()
+                user_behavior[col_name] = 0
+                user_behavior.loc[user_behavior.index.isin(matching_clients), col_name] = 1
+            
+            elif match_type == 'url_prefix':
+                 matching_clients = df_hits[df_hits['ym:pv:URL'].astype(str).str.startswith(match_val, na=False)]['ym:pv:clientID'].unique()
+                 user_behavior[col_name] = 0
+                 user_behavior.loc[user_behavior.index.isin(matching_clients), col_name] = 1
+            
+            # For 'click' or others we might skip if we don't have specific click events in hits, 
+            # or assume they map to identifier if Metrica tracks them as JS goals.
+            # We'll initialize with 0 if not handled.
+            if col_name not in user_behavior.columns:
+                user_behavior[col_name] = 0
+
+        # Fill NaNs
+        user_behavior = user_behavior.fillna(0)
+
+        # 3. Clustering (ML)
+        self.stdout.write("Running K-Means...")
+        scaler = StandardScaler()
+        # Select features: standard metrics + all goal columns
+        feature_cols = ['avg_duration', 'avg_depth', 'total_visits', 'bounce_prob'] 
+        # Add goal columns to clustering features? 
+        # Ideally yes, so we separate "Buyers" from "Readers"
+        goal_cols = [c for c in user_behavior.columns if c.startswith('goal_')]
+        feature_cols += goal_cols
+        
+        X = scaler.fit_transform(user_behavior[feature_cols])
+        
+        n_clusters = 4
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        user_behavior['cluster'] = kmeans.fit_predict(X)
+        
+        # 4. Save & Name Cohorts (AI)
+        UserCohort.objects.filter(version=version).delete()
+        
+        for cluster_id in range(n_clusters):
+            cluster_data = user_behavior[user_behavior['cluster'] == cluster_id]
+            
+            # Calculate avg metrics
+            avg_bounce = cluster_data['bounce_prob'].mean()
+            avg_duration = cluster_data['avg_duration'].mean()
+            avg_depth = cluster_data['avg_depth'].mean()
+            
+            # Calculate conversion rates for goals (mean of 0/1 flags)
+            conversions = {}
+            top_goals = []
+            for gc in goal_cols:
+                rate = cluster_data[gc].mean()
+                if rate > 0:
+                    conversions[gc.replace('goal_', '')] = round(rate, 4)
+                    if rate > 0.05: # 5% threshold for "significant" goal
+                        top_goals.append(f"{gc.replace('goal_', '')}({int(rate*100)}%)")
+
+            # Prepare metrics for DB and AI
+            metrics_dict = {
+                'bounce': round(avg_bounce * 100, 1),
+                'duration': int(avg_duration),
+                'depth': round(avg_depth, 1),
+                'top_goals': ", ".join(top_goals) if top_goals else "None"
+            }
+            
+            # AI Naming
+            cohort_name = generate_cohort_name(metrics_dict)
+            
+            UserCohort.objects.create(
+                version=version,
+                name=cohort_name,
+                avg_bounce_rate=metrics_dict['bounce'],
+                avg_duration=metrics_dict['duration'],
+                users_count=len(cluster_data),
+                percentage=len(cluster_data) / len(user_behavior),
+                metrics=metrics_dict,
+                conversion_rates=conversions
+            )
+            self.stdout.write(f"Saved cohort: {cohort_name} ({len(cluster_data)} users)")
+
     def calculate_daily_stats(self, version):
-        # ... (keep existing)
         self.stdout.write("Calculating daily stats...")
         from django.db.models import Count, Avg, Sum, Q
         from django.db.models.functions import TruncDate

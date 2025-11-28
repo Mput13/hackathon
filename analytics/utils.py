@@ -1,46 +1,30 @@
-import re
+import yaml
+import os
+from typing import List, Dict, Any
 
-def get_readable_page_name(url):
-    """
-    Maps technical URLs to business stage names.
-    """
-    url = url.lower()
-    
-    patterns = [
-        (r'/login', 'Authorization'),
-        (r'/auth', 'Authorization'),
-        (r'/loan/create', 'Loan Application'),
-        (r'/loan/form', 'Loan Details Form'),
-        (r'/mortgage', 'Mortgage Calculator'),
-        (r'/card/order', 'Card Ordering'),
-        (r'/profile', 'User Profile'),
-        (r'/history', 'Transaction History'),
-        (r'/$', 'Home Page'),
-    ]
-    
-    for pattern, name in patterns:
-        if re.search(pattern, url):
-            return name
-            
-    # Fallback: clean up the path
-    try:
-        path = url.split('pfem.mai.ru')[-1].split('?')[0]
-        return path if path else "Unknown Page"
-    except:
-        return url
+class GoalParser:
+    def __init__(self, config_path='goals.yaml'):
+        self.config_path = config_path
+        self.goals = self._load_goals()
 
-def generate_ai_hypothesis(issue_type, context):
-    """
-    Stub for LLM generation.
-    In real MVP, this would call OpenAI/GigaChat API.
-    """
-    prompts = {
-        'RAGE_CLICK': "Гипотеза: Элемент выглядит кликабельным, но ответ задержан. Исправить: добавить ховер/лоадер и проверить JS обработчик.",
-        'HIGH_BOUNCE': "Гипотеза: Первый экран не совпадает с ожиданием трафика или грузится медленно. Исправить: скорректировать H1/offer под источник и ускорить LCP.",
-        'LOOPING': "Гипотеза: Пользователь теряет контекст навигации и возвращается назад. Исправить: упростить путь и добавить явный CTA/хлебные крошки.",
-        'FORM_ABANDON': "Гипотеза: Слишком много полей или ранний запрос чувствительных данных. Исправить: сократить форму, разбить на шаги и показать прогресс.",
-    }
-    
-    base_hypothesis = prompts.get(issue_type, "Гипотеза: сложный UX кейс. Исправить: провести ручной разбор и юзабилити-тест.")
-    
-    return f"[AI Generated] {base_hypothesis} (Данные: {context})"
+    def _load_goals(self) -> List[Dict[str, Any]]:
+        """Load goals from YAML configuration file."""
+        if not os.path.exists(self.config_path):
+            print(f"Warning: Goals config not found at {self.config_path}")
+            return []
+        
+        try:
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                return yaml.safe_load(f) or []
+        except Exception as e:
+            print(f"Error loading goals config: {e}")
+            return []
+
+    def get_goals(self) -> List[Dict[str, Any]]:
+        return self.goals
+
+    def get_goal_by_code(self, code: str) -> Dict[str, Any]:
+        for goal in self.goals:
+            if goal.get('code') == code:
+                return goal
+        return None

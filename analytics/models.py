@@ -68,6 +68,29 @@ class UXIssue(models.Model):
     
     created_at = models.DateTimeField(auto_now_add=True)
 
+
+class UserCohort(models.Model):
+    """Результат кластеризации: Группа пользователей с похожим поведением"""
+    version = models.ForeignKey(ProductVersion, on_delete=models.CASCADE, related_name='cohorts')
+    
+    # Название от нейросети (например: "Заблудившиеся с мобилок")
+    name = models.CharField(max_length=100)
+    
+    # Метрики этой группы (для графика)
+    avg_bounce_rate = models.FloatField()
+    avg_duration = models.FloatField()
+    users_count = models.IntegerField()
+    percentage = models.FloatField() # Доля от всей аудитории (0.0 - 1.0)
+    
+    # Новые поля для целей
+    metrics = models.JSONField(default=dict) # Полные метрики (bounce, duration, depth и т.д.)
+    conversion_rates = models.JSONField(default=dict) # {"apply_it_button": 0.05, ...}
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.percentage*100:.1f}%)"
+
 class DailyStat(models.Model):
     """Прекалькулированная статистика по дням для быстрых графиков"""
     version = models.ForeignKey(ProductVersion, on_delete=models.CASCADE)

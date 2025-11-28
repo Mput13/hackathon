@@ -2,7 +2,7 @@ from django.shortcuts import render
 from django.db.models import Sum, Avg, Count, Case, When, IntegerField
 from django.db.models.functions import Cast
 from django.http import JsonResponse
-from .models import ProductVersion, VisitSession, UXIssue, DailyStat
+from .models import ProductVersion, VisitSession, UXIssue, DailyStat, UserCohort
 from .utils import get_readable_page_name
 
 def dashboard(request):
@@ -96,6 +96,9 @@ def compare_versions(request):
             
             v1_dur = stats_v1['duration'] or 0
             v2_dur = stats_v2['duration'] or 0
+
+            v1_cohorts = UserCohort.objects.filter(version=v1).order_by('-percentage')
+            v2_cohorts = UserCohort.objects.filter(version=v2).order_by('-percentage')
             
             comparison = {
                 'v1': v1, 'v2': v2,
@@ -103,7 +106,9 @@ def compare_versions(request):
                 'bounce_diff': round(v2_bounce - v1_bounce, 1),
                 'duration_diff': round(v2_dur - v1_dur, 1),
                 'stats_v1': {'visits': v1_visits, 'bounce': round(v1_bounce, 1), 'duration': round(v1_dur, 1)},
-                'stats_v2': {'visits': v2_visits, 'bounce': round(v2_bounce, 1), 'duration': round(v2_dur, 1)}
+                'stats_v2': {'visits': v2_visits, 'bounce': round(v2_bounce, 1), 'duration': round(v2_dur, 1)},
+                'v1_cohorts': v1_cohorts,
+                'v2_cohorts': v2_cohorts
             }
             context['comparison'] = comparison
         except ProductVersion.DoesNotExist:

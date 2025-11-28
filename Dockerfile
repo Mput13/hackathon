@@ -11,6 +11,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     gcc \
     libpq-dev \
+    dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -20,8 +21,8 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 # Copy project
 COPY . /app/
 
-# Entrypoint applies migrations/ingest before launching
-RUN chmod +x /app/entrypoint.sh
+# Fix line endings and permissions
+RUN dos2unix /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 # Default command (can be overridden in docker-compose)

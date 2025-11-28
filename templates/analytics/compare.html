@@ -63,7 +63,41 @@
                     <p class="text-sm text-gray-500">Total Visits</p>
                     <p class="text-xl font-bold">{{ comparison.stats_v1.visits }}</p>
                 </div>
-                <!-- More metrics here -->
+                
+                <div class="mt-6">
+                    <h4 class="text-sm font-bold text-gray-500 mb-2">Audience Segments (AI)</h4>
+                    {% for cohort in comparison.v1_cohorts %}
+                    <div class="bg-white p-4 mb-3 rounded-lg shadow-sm border border-gray-100">
+                        <div class="flex justify-between items-start mb-2">
+                            <h5 class="font-bold text-gray-800 text-sm">{{ cohort.name }}</h5>
+                            <span class="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded-full">
+                                {{ cohort.percentage|floatform:2 }}%
+                            </span>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2 text-xs text-gray-500">
+                            <div>
+                                <span class="block">Bounce</span>
+                                <span class="font-medium text-gray-700">{{ cohort.avg_bounce_rate|floatform:1 }}%</span>
+                            </div>
+                            <div>
+                                <span class="block">Time</span>
+                                <span class="font-medium text-gray-700">{{ cohort.avg_duration|floatform:0 }}s</span>
+                            </div>
+                             <div>
+                                <span class="block">Depth</span>
+                                <span class="font-medium text-gray-700">{{ cohort.metrics.depth }}</span>
+                            </div>
+                        </div>
+                        {% if cohort.metrics.top_goals %}
+                        <div class="mt-2 pt-2 border-t border-gray-50 text-xs">
+                            <span class="text-green-600 font-medium">Top Goals:</span> {{ cohort.metrics.top_goals }}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% empty %}
+                    <p class="text-gray-400 text-sm italic">No segments found.</p>
+                    {% endfor %}
+                </div>
             </div>
         </div>
 
@@ -75,7 +109,41 @@
                     <p class="text-sm text-gray-500">Total Visits</p>
                     <p class="text-xl font-bold">{{ comparison.stats_v2.visits }}</p>
                 </div>
-                 <!-- More metrics here -->
+                 
+                <div class="mt-6">
+                    <h4 class="text-sm font-bold text-indigo-400 mb-2">Audience Segments (AI)</h4>
+                    {% for cohort in comparison.v2_cohorts %}
+                    <div class="bg-white p-4 mb-3 rounded-lg shadow-sm border border-indigo-100">
+                        <div class="flex justify-between items-start mb-2">
+                            <h5 class="font-bold text-gray-800 text-sm">{{ cohort.name }}</h5>
+                            <span class="bg-indigo-100 text-indigo-700 text-xs px-2 py-1 rounded-full">
+                                {{ cohort.percentage|floatform:2 }}%
+                            </span>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2 text-xs text-gray-500">
+                            <div>
+                                <span class="block">Bounce</span>
+                                <span class="font-medium text-gray-700">{{ cohort.avg_bounce_rate|floatform:1 }}%</span>
+                            </div>
+                            <div>
+                                <span class="block">Time</span>
+                                <span class="font-medium text-gray-700">{{ cohort.avg_duration|floatform:0 }}s</span>
+                            </div>
+                            <div>
+                                <span class="block">Depth</span>
+                                <span class="font-medium text-gray-700">{{ cohort.metrics.depth }}</span>
+                            </div>
+                        </div>
+                        {% if cohort.metrics.top_goals %}
+                        <div class="mt-2 pt-2 border-t border-gray-50 text-xs">
+                            <span class="text-green-600 font-medium">Top Goals:</span> {{ cohort.metrics.top_goals }}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% empty %}
+                    <p class="text-gray-400 text-sm italic">No segments found.</p>
+                    {% endfor %}
+                </div>
             </div>
         </div>
     </div>

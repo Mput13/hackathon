@@ -2,8 +2,29 @@ from django.shortcuts import render
 from django.db.models import Sum, Avg, Count, Case, When, IntegerField
 from django.db.models.functions import Cast
 from django.http import JsonResponse
-from .models import ProductVersion, VisitSession, UXIssue, DailyStat, UserCohort
+from .models import ProductVersion, VisitSession, UXIssue, DailyStat, UserCohort, PageMetrics
 from .utils import get_readable_page_name
+import urllib.parse
+
+
+def _normalize_issue_url(raw_url: str) -> str:
+    """
+    Нормализация URL для дедупликации: убираем utm/referer/trailing slash.
+    Повторяет логику ingest, чтобы корректно сравнивать между версиями.
+    """
+    if not isinstance(raw_url, str):
+        return ""
+    parsed = urllib.parse.urlparse(raw_url.strip())
+    netloc = parsed.netloc.lower()
+    path = (parsed.path or "/").rstrip("/") or "/"
+    query_dict = urllib.parse.parse_qs(parsed.query, keep_blank_values=False)
+    for noisy in ['referer', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'yclid', '_openstat', 'from', 'ref']:
+        query_dict.pop(noisy, None)
+    clean_query = urllib.parse.urlencode({k: v[0] if len(v) == 1 else v for k, v in query_dict.items()}, doseq=True)
+    scheme = parsed.scheme.lower() if parsed.scheme else ("https" if netloc else "")
+    if netloc or scheme:
+        return urllib.parse.urlunparse((scheme, netloc, path, '', clean_query, ''))
+    return path + (f"?{clean_query}" if clean_query else "")
 
 TREND_LABELS = {
     'new': 'Новая проблема',
@@ -102,7 +123,6 @@ def compare_versions(request):
             )
             
             # Calculate Diff
-            # Handle None values safely
             v1_visits = stats_v1['visits'] or 0
             v2_visits = stats_v2['visits'] or 0
             
@@ -112,9 +132,110 @@ def compare_versions(request):
             v1_dur = stats_v1['duration'] or 0
             v2_dur = stats_v2['duration'] or 0
 
-            v1_cohorts = UserCohort.objects.filter(version=v1).order_by('-percentage')
-            v2_cohorts = UserCohort.objects.filter(version=v2).order_by('-percentage')
-            
+            v1_cohorts = list(UserCohort.objects.filter(version=v1).order_by('-percentage'))
+            v2_cohorts = list(UserCohort.objects.filter(version=v2).order_by('-percentage'))
+            for c in v1_cohorts:
+                c.display_percentage = (c.percentage or 0) * 100
+            for c in v2_cohorts:
+                c.display_percentage = (c.percentage or 0) * 100
+
+            # Build diff for issues
+            issues_v1 = UXIssue.objects.filter(version=v1)
+            issues_v2 = UXIssue.objects.filter(version=v2)
+            def index_issues(qs):
+                data = {}
+                for it in qs:
+                    key = (it.issue_type, _normalize_issue_url(it.location_url))
+                    data[key] = it
+                return data
+            idx_v1 = index_issues(issues_v1)
+            idx_v2 = index_issues(issues_v2)
+            issues_diff = []
+            for key, issue in idx_v2.items():
+                prev = idx_v1.get(key)
+                if not prev:
+                    status = "new"
+                    impact_diff = issue.impact_score
+                else:
+                    impact_diff = (issue.impact_score or 0) - (prev.impact_score or 0)
+                    if impact_diff > 1:
+                        status = "worse"
+                    elif impact_diff < -1:
+                        status = "improved"
+                    else:
+                        status = "stable"
+                issues_diff.append({
+                    'issue': issue,
+                    'status': status,
+                    'impact_diff': round(impact_diff, 2),
+                    'location_readable': get_readable_page_name(issue.location_url),
+                })
+            for key, issue in idx_v1.items():
+                if key not in idx_v2:
+                    issues_diff.append({
+                        'issue': issue,
+                        'status': 'resolved',
+                        'impact_diff': -(issue.impact_score or 0),
+                        'location_readable': get_readable_page_name(issue.location_url),
+                    })
+            issues_diff = sorted(issues_diff, key=lambda x: (-abs(x['impact_diff']), x['issue'].severity))
+
+            # Build diff for pages
+            pages_v1 = { _normalize_issue_url(m.url): m for m in PageMetrics.objects.filter(version=v1) }
+            pages_v2 = { _normalize_issue_url(m.url): m for m in PageMetrics.objects.filter(version=v2) }
+            page_diff = []
+            keys = set(pages_v1.keys()) | set(pages_v2.keys())
+            for key in keys:
+                m1 = pages_v1.get(key)
+                m2 = pages_v2.get(key)
+                views1 = m1.total_views if m1 else 0
+                views2 = m2.total_views if m2 else 0
+                max_views = max(views1, views2)
+                if max_views and max_views < 20:
+                    continue  # игнорируем шумные страницы с малым трафиком
+                status = 'stable'
+                exit_diff = 0
+                time_diff = 0
+                if m1 and not m2:
+                    status = 'removed'
+                elif m2 and not m1:
+                    status = 'new'
+                else:
+                    exit_diff = (m2.exit_rate or 0) - (m1.exit_rate or 0)
+                    time_diff = (m2.avg_time_on_page or 0) - (m1.avg_time_on_page or 0)
+                    # ограничиваем экстремальные выбросы
+                    if time_diff > 1800:
+                        time_diff = 1800
+                    if time_diff < -1800:
+                        time_diff = -1800
+                    if abs(exit_diff) > 5 or abs(time_diff) > 5:
+                        status = 'changed'
+                readable = get_readable_page_name(m2.url if m2 else m1.url)
+                page_diff.append({
+                    'key': key,
+                    'status': status,
+                    'exit_diff': round(exit_diff, 1),
+                    'time_diff': round(time_diff, 1),
+                    'v1': m1,
+                    'v2': m2,
+                    'readable': readable,
+                })
+            page_diff = sorted(page_diff, key=lambda x: (-abs(x['exit_diff']), x['readable']))
+
+            # Diff for cohorts (by name)
+            coh_v1 = {c.name: c for c in v1_cohorts}
+            coh_v2 = {c.name: c for c in v2_cohorts}
+            cohorts_diff = []
+            for name, c2 in coh_v2.items():
+                c1 = coh_v1.get(name)
+                if not c1:
+                    cohorts_diff.append({'name': name, 'status': 'new', 'v1': None, 'v2': c2})
+                else:
+                    cohorts_diff.append({'name': name, 'status': 'changed', 'v1': c1, 'v2': c2})
+            for name, c1 in coh_v1.items():
+                if name not in coh_v2:
+                    cohorts_diff.append({'name': name, 'status': 'removed', 'v1': c1, 'v2': None})
+
             comparison = {
                 'v1': v1, 'v2': v2,
                 'visits_diff': int(v2_visits - v1_visits),
@@ -123,7 +244,10 @@ def compare_versions(request):
                 'stats_v1': {'visits': v1_visits, 'bounce': round(v1_bounce, 1), 'duration': round(v1_dur, 1)},
                 'stats_v2': {'visits': v2_visits, 'bounce': round(v2_bounce, 1), 'duration': round(v2_dur, 1)},
                 'v1_cohorts': v1_cohorts,
-                'v2_cohorts': v2_cohorts
+                'v2_cohorts': v2_cohorts,
+                'issues_diff': issues_diff[:20],
+                'pages_diff': page_diff[:20],
+                'cohorts_diff': cohorts_diff[:20],
             }
             context['comparison'] = comparison
         except ProductVersion.DoesNotExist:

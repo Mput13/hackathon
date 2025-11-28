@@ -53,6 +53,120 @@
         </div>
     </div>
 
+    <!-- Issues diff -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+        <div class="flex items-center justify-between mb-4">
+            <h4 class="text-sm font-bold text-gray-700 uppercase tracking-wider">Issues Diff (top)</h4>
+            <div class="text-xs text-gray-500">New/Worse/Improved/Resolved</div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 text-gray-500 uppercase text-xs">
+                    <tr>
+                        <th class="px-3 py-2 text-left">Type</th>
+                        <th class="px-3 py-2 text-left">Location</th>
+                        <th class="px-3 py-2 text-left">Status</th>
+                        <th class="px-3 py-2 text-right">Impact Δ</th>
+                        <th class="px-3 py-2 text-right">Impact</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for row in comparison.issues_diff %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-3 py-2">{{ row.issue.get_issue_type_display }}</td>
+                        <td class="px-3 py-2">
+                            <div class="text-indigo-600 font-medium">{{ row.location_readable }}</div>
+                            <div class="text-xs text-gray-400 font-mono">{{ row.issue.location_url }}</div>
+                        </td>
+                        <td class="px-3 py-2">
+                            <span class="px-2 py-1 rounded-full text-xs {% if row.status == 'new' %}bg-green-100 text-green-700{% elif row.status == 'resolved' %}bg-gray-100 text-gray-600{% elif row.status == 'worse' %}bg-red-100 text-red-700{% elif row.status == 'improved' %}bg-blue-100 text-blue-700{% else %}bg-yellow-50 text-yellow-700{% endif %}">
+                                {{ row.status|title }}
+                            </span>
+                        </td>
+                        <td class="px-3 py-2 text-right {% if row.impact_diff > 0 %}text-red-600{% elif row.impact_diff < 0 %}text-green-600{% endif %}">
+                            {% if row.impact_diff > 0 %}+{% endif %}{{ row.impact_diff }}
+                        </td>
+                        <td class="px-3 py-2 text-right">{{ row.issue.impact_score|floatformat:"-2" }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="5" class="px-3 py-4 text-center text-gray-400">No issues to compare.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Pages diff -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+        <div class="flex items-center justify-between mb-4">
+            <h4 class="text-sm font-bold text-gray-700 uppercase tracking-wider">Pages Diff (top)</h4>
+            <div class="text-xs text-gray-500">Exit/Time changes</div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 text-gray-500 uppercase text-xs">
+                    <tr>
+                        <th class="px-3 py-2 text-left">Page</th>
+                        <th class="px-3 py-2 text-left">Status</th>
+                        <th class="px-3 py-2 text-right">Exit Δ (p.p.)</th>
+                        <th class="px-3 py-2 text-right">Time Δ (s)</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for row in comparison.pages_diff %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-3 py-2">
+                            <div class="text-indigo-600 font-medium">{{ row.readable }}</div>
+                            <div class="text-xs text-gray-400 font-mono">
+                                {% if row.v2 %}{{ row.v2.url }}{% else %}{{ row.v1.url }}{% endif %}
+                            </div>
+                        </td>
+                        <td class="px-3 py-2 text-xs">
+                            <span class="px-2 py-1 rounded-full {% if row.status == 'new' %}bg-green-100 text-green-700{% elif row.status == 'removed' %}bg-gray-100 text-gray-600{% elif row.status == 'changed' %}bg-yellow-100 text-yellow-700{% else %}bg-blue-50 text-blue-700{% endif %}">
+                                {{ row.status|title }}
+                            </span>
+                        </td>
+                        <td class="px-3 py-2 text-right {% if row.exit_diff > 0 %}text-red-600{% elif row.exit_diff < 0 %}text-green-600{% endif %}">
+                            {% if row.exit_diff > 0 %}+{% endif %}{{ row.exit_diff }}
+                        </td>
+                        <td class="px-3 py-2 text-right {% if row.time_diff > 0 %}text-green-600{% elif row.time_diff < 0 %}text-red-600{% endif %}">
+                            {% if row.time_diff > 0 %}+{% endif %}{{ row.time_diff }}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="4" class="px-3 py-4 text-center text-gray-400">No page differences.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Cohorts diff -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+        <div class="flex items-center justify-between mb-4">
+            <h4 class="text-sm font-bold text-gray-700 uppercase tracking-wider">Cohorts Diff</h4>
+            <div class="text-xs text-gray-500">New/Removed/Changed segments</div>
+        </div>
+        <div class="space-y-3">
+            {% for row in comparison.cohorts_diff %}
+            <div class="p-3 border rounded-lg flex items-center justify-between {% if row.status == 'new' %}bg-green-50 border-green-100{% elif row.status == 'removed' %}bg-gray-50 border-gray-200{% else %}bg-blue-50 border-blue-100{% endif %}">
+                <div>
+                    <p class="font-semibold text-sm text-gray-800">{{ row.name }}</p>
+                    <p class="text-xs text-gray-500">
+                        {% if row.v1 %}v1: {{ row.v1.display_percentage|floatformat:2 }}%{% endif %}
+                        {% if row.v2 %} v2: {{ row.v2.display_percentage|floatformat:2 }}%{% endif %}
+                    </p>
+                </div>
+                <span class="text-xs px-2 py-1 rounded-full {% if row.status == 'new' %}bg-green-100 text-green-700{% elif row.status == 'removed' %}bg-gray-100 text-gray-600{% else %}bg-blue-100 text-blue-700{% endif %}">
+                    {{ row.status|title }}
+                </span>
+            </div>
+            {% empty %}
+            <p class="text-center text-gray-400 text-sm">No cohort differences.</p>
+            {% endfor %}
+        </div>
+    </div>
+
     <!-- Detailed Split View -->
     <div class="grid grid-cols-2 gap-6">
         <!-- V1 Column -->
@@ -71,7 +185,7 @@
                         <div class="flex justify-between items-start mb-2">
                             <h5 class="font-bold text-gray-800 text-sm">{{ cohort.name }}</h5>
                             <span class="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded-full">
-                                {{ cohort.percentage|floatformat:2 }}%
+                                {{ cohort.display_percentage|floatformat:2 }}%
                             </span>
                         </div>
                         <div class="grid grid-cols-3 gap-2 text-xs text-gray-500">
@@ -117,7 +231,7 @@
                         <div class="flex justify-between items-start mb-2">
                             <h5 class="font-bold text-gray-800 text-sm">{{ cohort.name }}</h5>
                             <span class="bg-indigo-100 text-indigo-700 text-xs px-2 py-1 rounded-full">
-                                {{ cohort.percentage|floatformat:2 }}%
+                                {{ cohort.display_percentage|floatformat:2 }}%
                             </span>
                         </div>
                         <div class="grid grid-cols-3 gap-2 text-xs text-gray-500">

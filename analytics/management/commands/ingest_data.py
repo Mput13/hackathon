@@ -375,8 +375,8 @@ class Command(BaseCommand):
         
         # 4. Save & Name Cohorts (AI)
         UserCohort.objects.filter(version=version).delete()
-        base_name_counts = {}
-        
+        combined = {}
+
         for cluster_id in range(n_clusters):
             cluster_data = user_behavior[user_behavior['cluster'] == cluster_id]
             
@@ -440,21 +440,91 @@ class Command(BaseCommand):
                 detail_bits.append(primary_goal_label)
             if detail_bits:
                 base_name = f"{base_name} — {', '.join(detail_bits)}"
-            count = base_name_counts.get(base_name, 0) + 1
-            base_name_counts[base_name] = count
-            cohort_name = f"{base_name} #{count}"
-            
+            if base_name not in combined:
+                combined[base_name] = {
+                    "count": 0,
+                    "bounce_sum": 0.0,
+                    "duration_sum": 0.0,
+                    "depth_sum": 0.0,
+                    "goal_sums": {gc: 0.0 for gc in goal_cols},
+                    "interest_sums": {ic: 0.0 for ic in interest_cols},
+                }
+            agg = combined[base_name]
+            agg["count"] += len(cluster_data)
+            agg["bounce_sum"] += cluster_data['bounce_prob'].sum()
+            agg["duration_sum"] += cluster_data['avg_duration'].sum()
+            agg["depth_sum"] += cluster_data['avg_depth'].sum()
+            for gc in goal_cols:
+                agg["goal_sums"][gc] += cluster_data[gc].sum()
+            for ic in interest_cols:
+                agg["interest_sums"][ic] += cluster_data[ic].sum()
+
+        # Persist combined cohorts (one per name)
+        for cohort_name, agg in combined.items():
+            total_users = agg["count"]
+            if total_users == 0:
+                continue
+
+            avg_bounce = agg["bounce_sum"] / total_users
+            avg_duration = agg["duration_sum"] / total_users
+            avg_depth = agg["depth_sum"] / total_users
+
+            conversions = {}
+            top_goals = []
+            for gc, sum_val in agg["goal_sums"].items():
+                rate = sum_val / total_users
+                if rate > 0:
+                    code = gc.replace('goal_', '')
+                    conversions[code] = round(rate, 4)
+                    if rate > 0.05:
+                        top_goals.append(f"{code}({int(rate*100)}%)")
+
+            interest_rates = []
+            for ic, sum_val in agg["interest_sums"].items():
+                rate = sum_val / total_users
+                if rate > 0:
+                    code = ic.replace('interest_', '')
+                    interest_rates.append((code, rate))
+            interest_rates.sort(key=lambda x: x[1], reverse=True)
+            top_interest_codes = [c for c, _ in interest_rates[:3]]
+            interest_summary = []
+            for code, rate in interest_rates[:3]:
+                label = interest_labels.get(code, code)
+                interest_summary.append(f"{label} ({int(rate*100)}%)")
+            top_interests = ", ".join(interest_summary) if interest_summary else "None"
+            primary_interest_label = interest_labels.get(top_interest_codes[0], "без яркого интереса") if top_interest_codes else "без яркого интереса"
+            primary_goal_label = top_goals[0] if top_goals else "без целей"
+
+            metrics_dict = {
+                'bounce': round(avg_bounce * 100, 1),
+                'duration': int(avg_duration),
+                'depth': round(avg_depth, 1),
+                'top_goals': ", ".join(top_goals) if top_goals else "None",
+                'top_interests': top_interests,
+                'interest_codes': top_interest_codes,
+            }
+
+            # Enrich name with details (but no numbering; same-name clusters are merged)
+            final_name = cohort_name
+            detail_bits = []
+            if primary_interest_label and primary_interest_label != "без яркого интереса":
+                detail_bits.append(primary_interest_label)
+            if primary_goal_label and primary_goal_label != "без целей":
+                detail_bits.append(primary_goal_label)
+            if detail_bits and "—" not in final_name:
+                final_name = f"{final_name} — {', '.join(detail_bits)}"
+
             UserCohort.objects.create(
                 version=version,
-                name=cohort_name,
+                name=final_name,
                 avg_bounce_rate=metrics_dict['bounce'],
                 avg_duration=metrics_dict['duration'],
-                users_count=len(cluster_data),
-                percentage=len(cluster_data) / len(user_behavior),
+                users_count=total_users,
+                percentage=total_users / len(user_behavior),
                 metrics=metrics_dict,
                 conversion_rates=conversions
             )
-            self.stdout.write(f"Saved cohort: {cohort_name} ({len(cluster_data)} users)")
+            self.stdout.write(f"Saved cohort: {final_name} ({total_users} users)")
 
     def calculate_daily_stats(self, version):
         self.stdout.write("Calculating daily stats...")

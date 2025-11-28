@@ -1,7 +1,10 @@
 import os
 import sys
-import requests
 import json
+try:
+    import requests
+except ImportError:
+    requests = None
 
 # Получаем креды из ENV
 FOLDER_ID = os.environ.get("FOLDER_ID") or os.environ.get("folder_id")
@@ -9,7 +12,7 @@ API_KEY = os.environ.get("API_KEY") or os.environ.get("api_key")
 
 def _send_gpt_request(system_text, user_text):
     """Helper to send request to YandexGPT"""
-    if not FOLDER_ID or not API_KEY:
+    if not FOLDER_ID or not API_KEY or requests is None:
         return None
 
     url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"

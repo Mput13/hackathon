@@ -45,20 +45,11 @@
     *   `2024_yandex_metrika_visits.parquet`
     *   `2024_yandex_metrika_hits.parquet`
 
-3.  Создайте файл `.env` (или используйте дефолтный):
-    ```env
-    DEBUG=1
-    SECRET_KEY=your-secret-key
-    DB_ENGINE=django.db.backends.postgresql
-    DB_NAME=postgres
-    DB_USER=postgres
-    DB_PASSWORD=postgres
-    DB_HOST=db
-    DB_PORT=5432
-    
-    # Опционально: Ключ GigaChat (Authorization Data)
-    GIGACHAT_CREDENTIALS=Ваш_Base64_Ключ
+3.  Создайте файл `.env` на основе `.env.example`:
+    ```bash
+    cp .env.example .env
     ```
+    Заполните `SECRET_KEY`, при необходимости поменяйте параметры БД. Для генерации гипотез укажите `folder_id` и `api_key` (Yandex Cloud, OpenAI-совместимый API). Если оставить их пустыми, будет использоваться заглушка.
 
 ### Шаг 2. Запуск контейнеров
 

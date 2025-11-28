@@ -1,0 +1,114 @@
+# UX Insight: AI-Powered UX Analytics Platform
+
+Платформа для автоматизированного анализа пользовательского опыта на основе данных Яндекс.Метрики. Автоматически выявляет UX-проблемы, сравнивает версии продукта и генерирует гипотезы с помощью GigaChat AI.
+
+Разработано в рамках хакатона PSB "AI Challenge: Banking".
+
+![Dashboard Screenshot](https://via.placeholder.com/800x400?text=Dashboard+Preview)
+
+## 🚀 Функциональность
+
+*   **Анализ логов (Logs API):** Импорт и обработка сырых данных (Parquet) о визитах и хитах.
+*   **Детектор аномалий:** Автоматическое выявление паттернов "боли":
+    *   😡 **Rage Clicks:** Яростные клики по неработающим элементам.
+    *   📉 **High Bounce Rate:** Моментальные уходы со страниц.
+    *   🔄 **Navigation Loops:** Зацикливание пользователей в меню.
+*   **AI-Инсайты:** Интеграция с **GigaChat** для генерации объяснений проблем и советов по исправлению.
+*   **Сравнение версий:** Режим "До/После" для оценки влияния релизов на метрики.
+
+## 🛠 Технологический стек
+
+*   **Backend:** Python 3.11, Django 5.0
+*   **Data Processing:** Pandas, PyArrow (Optimized Parquet Reader)
+*   **Database:** PostgreSQL 15
+*   **AI:** Sber GigaChat API
+*   **Frontend:** Tailwind CSS, Chart.js
+*   **Infra:** Docker, Docker Compose
+
+## 📦 Установка и запуск
+
+### Предварительные требования
+*   Docker & Docker Compose
+*   Файлы данных `.parquet` (Visits и Hits за 2022 и 2024 год)
+
+### Шаг 1. Клонирование и настройка
+
+1.  Склонируйте репозиторий:
+    ```bash
+    git clone https://github.com/your-username/ux-insight.git
+    cd ux-insight
+    ```
+
+2.  Разместите файлы данных в корне проекта (рядом с `manage.py`):
+    *   `2022_yandex_metrika_visits.parquet`
+    *   `2022_yandex_metrika_hits.parquet`
+    *   `2024_yandex_metrika_visits.parquet`
+    *   `2024_yandex_metrika_hits.parquet`
+
+3.  Создайте файл `.env` (или используйте дефолтный):
+    ```env
+    DEBUG=1
+    SECRET_KEY=your-secret-key
+    DB_ENGINE=django.db.backends.postgresql
+    DB_NAME=postgres
+    DB_USER=postgres
+    DB_PASSWORD=postgres
+    DB_HOST=db
+    DB_PORT=5432
+    
+    # Опционально: Ключ GigaChat (Authorization Data)
+    GIGACHAT_CREDENTIALS=Ваш_Base64_Ключ
+    ```
+
+### Шаг 2. Запуск контейнеров
+
+```bash
+docker-compose up --build -d
+```
+
+### Шаг 3. Инициализация БД
+
+```bash
+docker-compose exec web python manage.py migrate
+docker-compose exec web python manage.py createsuperuser
+```
+
+### Шаг 4. Загрузка и анализ данных
+
+Запустите ETL-скрипт для каждой версии. Это может занять несколько минут.
+
+**Загрузка версии 2022 (v1.0):**
+```bash
+docker-compose exec web python manage.py ingest_data \
+    --visits "2022_yandex_metrika_visits.parquet" \
+    --hits "2022_yandex_metrika_hits.parquet" \
+    --product-version "v1.0 (2022)" \
+    --year 2022
+```
+
+**Загрузка версии 2024 (v2.0):**
+```bash
+docker-compose exec web python manage.py ingest_data \
+    --visits "2024_yandex_metrika_visits.parquet" \
+    --hits "2024_yandex_metrika_hits.parquet" \
+    --product-version "v2.0 (2024)" \
+    --year 2024
+```
+
+### Шаг 5. Использование
+
+Откройте браузер: [http://localhost:8000](http://localhost:8000)
+
+*   **Dashboard:** Общая статистика.
+*   **Compare:** Сравните v1.0 и v2.0, чтобы увидеть изменения.
+*   **Issues:** Полный список проблем с рекомендациями AI.
+
+## 🧩 Структура проекта
+
+*   `analytics/management/commands/ingest_data.py`: Ядро анализа. Читает Parquet, ищет проблемы, вызывает AI.
+*   `analytics/ai_service.py`: Клиент GigaChat.
+*   `analytics/models.py`: Схема данных (ProductVersion, VisitSession, UXIssue).
+*   `templates/`: UI шаблоны.
+
+---
+License: MIT

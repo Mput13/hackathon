@@ -1,5 +1,6 @@
 import yaml
 import os
+import urllib.parse
 from typing import List, Dict, Any
 
 class GoalParser:
@@ -28,3 +29,34 @@ class GoalParser:
             if goal.get('code') == code:
                 return goal
         return None
+
+
+def get_readable_page_name(url: str) -> str:
+    """
+    Convert a raw URL/path into a short human-friendly name for UI display.
+    Examples:
+      https://mai.ru/priem/ -> "Priem"
+      /forms/apply_it -> "Forms Apply It"
+    """
+    if not url:
+        return "Unknown page"
+
+    parsed = urllib.parse.urlparse(url)
+    path = parsed.path or url
+
+    # Strip leading/trailing slashes and collapse empty paths
+    clean = path.strip('/')
+    if not clean:
+        return "Homepage"
+
+    # Use the last path segment as the primary label
+    segment = clean.split('/')[-1]
+    segment = urllib.parse.unquote(segment)
+
+    # Drop file extensions like ".php" for readability
+    if '.' in segment:
+        segment = segment.split('.')[0]
+
+    friendly = segment.replace('-', ' ').replace('_', ' ').strip()
+    # Title-case words, but keep digits as-is
+    return friendly.title() or path

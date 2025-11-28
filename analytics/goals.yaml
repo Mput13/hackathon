@@ -1,0 +1,125 @@
+# Goals configuration extracted from "Цели ЯМетрика.xlsx".
+# Fields:
+# - code: ASCII slug for referencing in code.
+# - name: Display name from the Excel file.
+# - ym_goal_id: Yandex Metrica goal ID.
+# - match: how to match events (identifier, url_prefix, url_contains, click).
+- code: apply_it_button
+  name: 'Кнопка "Поступить" IT-магистратура'
+  ym_goal_id: 39566071
+  match: {type: identifier, value: APPLY_IT}
+
+- code: submitted_applications
+  name: 'Отправленные заявки'
+  ym_goal_id: 39570505
+  match: {type: identifier, value: WEB_FORM_SUBMIT}
+
+- code: foreign_registration
+  name: foreign_registration
+  ym_goal_id: 53218326
+  match: {type: identifier, value: foreign_registration}
+
+- code: bach19_apply_button
+  name: bach19_кнопка_applyform
+  ym_goal_id: 53372308
+  match: {type: identifier, value: bach19__show-applyform}
+
+- code: bachelor2019_form
+  name: bachelor2019_форма
+  ym_goal_id: 53372344
+  match: {type: identifier, value: bachelor2019_request}
+
+- code: goto_contacts
+  name: goto-contacts
+  ym_goal_id: 53372407
+  match: {type: identifier, value: goto-contacts}
+
+- code: it_master_form
+  name: 'Форма IT-магистратура'
+  ym_goal_id: 53624581
+  match: {type: identifier, value: itmai_apply_2019}
+
+- code: contacts_view
+  name: 'просмотр контактов'
+  ym_goal_id: 53625076
+  match: {type: url_prefix, value: 'https://mai.ru/priem/contacts.php'}
+
+- code: it_master_button
+  name: 'Кнопка IT-магистратура'
+  ym_goal_id: 53631805
+  match: {type: url_contains, value: itmai__applyform}
+
+- code: b24_form_2_view
+  name: B24_FORM_2_VIEW
+  ym_goal_id: 94939123
+  match: {type: identifier, value: B24_FORM_2_VIEW}
+
+- code: b24_form_2_end
+  name: B24_FORM_2_END
+  ym_goal_id: 94939720
+  match: {type: identifier, value: B24_FORM_2_END}
+
+- code: science_day_form
+  name: 'Форма День науки в МАИ'
+  ym_goal_id: 135971944
+  match: {type: identifier, value: dos}
+
+- code: form_135
+  name: form_135
+  ym_goal_id: 157722139
+  match: {type: identifier, value: form_135}
+
+- code: vk_contacts_click
+  name: 'Кнопка ВК (контакты)'
+  ym_goal_id: 225392702
+  match: {type: click, value: null}
+
+- code: tg_contacts_click
+  name: 'Клик по кнопке ТГ (контакты)'
+  ym_goal_id: 225392736
+  match: {type: click, value: null}
+
+- code: big_dod_12_04_2025
+  name: 'Большой ДОД 12.04.2025'
+  ym_goal_id: 361289068
+  match: {type: identifier, value: 219}
+
+- code: big_dod_12_04_2025_form
+  name: 'Форма 219. Большой ДОД 12.04.25'
+  ym_goal_id: 366529444
+  match: {type: identifier, value: 219}
+
+- code: dod_magi_13_05_form_205
+  name: 'ДОД Маги 2025 - 13.05 (форма 205)'
+  ym_goal_id: 405691691
+  match: {type: identifier, value: 205}
+
+- code: dod_magi_13_05_form_206
+  name: 'ДОД маги 13.05.25 форма 206'
+  ym_goal_id: 412835792
+  match: {type: identifier, value: 205}
+
+- code: dod_open_pk_20_06_25
+  name: 'ДОД Открытие ПК 20.06.25 (форма 197)'
+  ym_goal_id: 430820888
+  match: {type: identifier, value: 197}
+
+- code: dod_vuc_10_07_25
+  name: 'ДОД ВУЦ 10.07.25'
+  ym_goal_id: 445488449
+  match: {type: click, value: null}
+
+- code: science_day_reg_11_10_25
+  name: 'Регистрация да День Науки 11.10.25'
+  ym_goal_id: 467662106
+  match: {type: click, value: null}
+
+- code: dod_29_11_2025
+  name: 'ДОД 29.11.2025'
+  ym_goal_id: 476492738
+  match: {type: click, value: null}
+
+- code: trajectory_olympiad_click
+  name: 'Клик по Олимпиада Траектория Взлёта'
+  ym_goal_id: 485706699
+  match: {type: click, value: null}

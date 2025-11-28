@@ -1,5 +1,6 @@
 from django.shortcuts import render
-from django.db.models import Sum, Avg, Count
+from django.db.models import Sum, Avg, Count, Case, When, IntegerField
+from django.db.models.functions import Cast
 from .models import ProductVersion, VisitSession, UXIssue, DailyStat
 from .utils import get_readable_page_name
 
@@ -13,7 +14,8 @@ def dashboard(request):
         stats = VisitSession.objects.filter(version=version).aggregate(
             total_visits=Count('id'),
             avg_duration=Avg('duration_sec'),
-            bounce_rate=Avg('bounced') # Casts boolean to int 0/1, avg gives rate
+            # Postgres requires explicit cast for boolean averaging
+            bounce_rate=Avg(Cast('bounced', output_field=IntegerField()))
         )
         
         issue_count = UXIssue.objects.filter(version=version).count()
@@ -73,13 +75,13 @@ def compare_versions(request):
             
             stats_v1 = VisitSession.objects.filter(version=v1).aggregate(
                 visits=Count('id'),
-                bounce=Avg('bounced'),
+                bounce=Avg(Cast('bounced', output_field=IntegerField())),
                 duration=Avg('duration_sec')
             )
             
             stats_v2 = VisitSession.objects.filter(version=v2).aggregate(
                 visits=Count('id'),
-                bounce=Avg('bounced'),
+                bounce=Avg(Cast('bounced', output_field=IntegerField())),
                 duration=Avg('duration_sec')
             )
             
@@ -107,3 +109,35 @@ def compare_versions(request):
             pass # Just don't show comparison if IDs are invalid
         
     return render(request, 'analytics/compare.html', context)
+
+def issues_list(request):
+    """Full List of Detected UX Issues"""
+    version_id = request.GET.get('version')
+    severity = request.GET.get('severity')
+    issue_type = request.GET.get('issue_type')
+    
+    issues = UXIssue.objects.select_related('version').all().order_by('-impact_score', '-created_at')
+    
+    if version_id:
+        issues = issues.filter(version_id=version_id)
+    if severity:
+        issues = issues.filter(severity=severity)
+    if issue_type:
+        issues = issues.filter(issue_type=issue_type)
+        
+    # Prepare readable names
+    # Note: For very large lists, this might be slow, but for <1000 issues it's fine
+    issues_list = []
+    for issue in issues:
+        issue.readable_location = get_readable_page_name(issue.location_url)
+        issues_list.append(issue)
+        
+    context = {
+        'issues': issues_list,
+        'versions': ProductVersion.objects.all(),
+        'issue_types': UXIssue.PROBLEM_TYPES,
+        'selected_version': int(version_id) if version_id else None,
+        'selected_severity': severity,
+        'selected_issue_type': issue_type
+    }
+    return render(request, 'analytics/issues.html', context)

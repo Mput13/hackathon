@@ -20,6 +20,9 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 # Copy project
 COPY . /app/
 
+# Entrypoint applies migrations/ingest before launching
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]
 # Default command (can be overridden in docker-compose)
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
-

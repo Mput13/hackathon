@@ -35,13 +35,12 @@ def generate_ai_hypothesis(issue_type, context):
     In real MVP, this would call OpenAI/GigaChat API.
     """
     prompts = {
-        'RAGE_CLICK': "Users are frustrated because the element looks interactive but isn't responding quickly. It might be a slow API call or a broken JS handler.",
-        'HIGH_BOUNCE': "The page content doesn't match user expectations from the traffic source, or the load time is too high.",
-        'LOOPING': "The navigation structure is confusing. Users are going back and forth trying to find a specific feature that isn't clearly labeled.",
-        'FORM_ABANDON': "The form is likely too long or asks for sensitive information too early. Validation errors might be unclear."
+        'RAGE_CLICK': "Гипотеза: Элемент выглядит кликабельным, но ответ задержан. Исправить: добавить ховер/лоадер и проверить JS обработчик.",
+        'HIGH_BOUNCE': "Гипотеза: Первый экран не совпадает с ожиданием трафика или грузится медленно. Исправить: скорректировать H1/offer под источник и ускорить LCP.",
+        'LOOPING': "Гипотеза: Пользователь теряет контекст навигации и возвращается назад. Исправить: упростить путь и добавить явный CTA/хлебные крошки.",
+        'FORM_ABANDON': "Гипотеза: Слишком много полей или ранний запрос чувствительных данных. Исправить: сократить форму, разбить на шаги и показать прогресс.",
     }
     
-    base_hypothesis = prompts.get(issue_type, "Complex UX anomaly detected requiring manual review.")
+    base_hypothesis = prompts.get(issue_type, "Гипотеза: сложный UX кейс. Исправить: провести ручной разбор и юзабилити-тест.")
     
-    return f"[AI Generated] {base_hypothesis} (Context: {context})"
-
+    return f"[AI Generated] {base_hypothesis} (Данные: {context})"

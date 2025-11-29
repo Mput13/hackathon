@@ -65,5 +65,11 @@ if [ "${AUTO_INGEST:-1}" = "1" ]; then
   fi
 fi
 
+# Auto-create and calculate preset funnels (can be disabled with AUTO_FUNNELS=0)
+if [ "${AUTO_FUNNELS:-1}" = "1" ]; then
+  echo "Ensuring preset funnels are created and calculated..."
+  python manage.py run_preset_funnels || echo "Preset funnels creation/calculation failed (skipping)."
+fi
+
 echo "Starting app with command: $*"
 exec "$@"

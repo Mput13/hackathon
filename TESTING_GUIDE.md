@@ -236,3 +236,4 @@ print('Новые issues:', UXIssue.objects.filter(issue_type__in=['WANDERING', 
 
 Если все числа > 0, значит все работает! 🎉
 
+

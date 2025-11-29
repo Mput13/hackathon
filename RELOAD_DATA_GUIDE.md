@@ -154,3 +154,4 @@ chmod +x reload_version.sh
 ./reload_version.sh "v2.0 (2024)" 2024 "2024_yandex_metrika_visits.parquet" "2024_yandex_metrika_hits.parquet"
 ```
 
+

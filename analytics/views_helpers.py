@@ -1,6 +1,7 @@
 import urllib.parse
+import math
 from django.db import models
-from django.db.models import Avg, Count, IntegerField
+from django.db.models import Avg, Count, IntegerField, Q
 from django.db.models.functions import Cast
 from .models import VisitSession, UXIssue, UserCohort, PageMetrics, PageHit
 from .utils import get_readable_page_name
@@ -276,11 +277,13 @@ def _build_comparison(v1, v2):
     stats_v1 = VisitSession.objects.filter(version=v1).aggregate(
         visits=Count('id'),
         bounce=Avg(Cast('bounced', output_field=IntegerField())),
+        bounce_count=Count('id', filter=Q(bounced=True)),
         duration=Avg('duration_sec')
     )
     stats_v2 = VisitSession.objects.filter(version=v2).aggregate(
         visits=Count('id'),
         bounce=Avg(Cast('bounced', output_field=IntegerField())),
+        bounce_count=Count('id', filter=Q(bounced=True)),
         duration=Avg('duration_sec')
     )
 
@@ -393,11 +396,33 @@ def _build_comparison(v1, v2):
         if name not in coh_v2:
             cohorts_diff.append({'name': name, 'status': 'removed', 'v1': c1, 'v2': None})
 
+    def _proportion_pvalue(count1, total1, count2, total2):
+        """Простой z-test для долей, без внешних зависимостей."""
+        if not total1 or not total2:
+            return None
+        p1 = count1 / total1
+        p2 = count2 / total2
+        p_pool = (count1 + count2) / (total1 + total2)
+        se = math.sqrt(max(p_pool * (1 - p_pool) * (1 / total1 + 1 / total2), 0.0000001))
+        if se == 0:
+            return None
+        z = (p2 - p1) / se
+        # двусторонний p-value через erfc
+        return round(2 * (0.5 * math.erfc(abs(z) / math.sqrt(2))), 6)
+
+    bounce_pvalue = _proportion_pvalue(
+        stats_v1.get('bounce_count') or 0,
+        v1_visits,
+        stats_v2.get('bounce_count') or 0,
+        v2_visits
+    )
+
     return {
         'v1': v1, 'v2': v2,
         'visits_diff': int(v2_visits - v1_visits),
         'bounce_diff': round(v2_bounce - v1_bounce, 1),
         'duration_diff': round(v2_dur - v1_dur, 1),
+        'bounce_pvalue': bounce_pvalue,
         'stats_v1': {'visits': v1_visits, 'bounce': round(v1_bounce, 1), 'duration': round(v1_dur, 1)},
         'stats_v2': {'visits': v2_visits, 'bounce': round(v2_bounce, 1), 'duration': round(v2_dur, 1)},
         'v1_cohorts': v1_cohorts,

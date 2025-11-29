@@ -240,6 +240,7 @@ def api_compare(request):
         'v2': {'id': v2.id, 'name': v2.name},
         'visits_diff': comparison['visits_diff'],
         'bounce_diff': comparison['bounce_diff'],
+        'bounce_pvalue': comparison.get('bounce_pvalue'),
         'duration_diff': comparison['duration_diff'],
         'stats_v1': {
             'visits': stats_v1['visits'] or 0,

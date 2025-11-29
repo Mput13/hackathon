@@ -108,6 +108,23 @@ class UXIssue(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 
+class IssueLifecycle(models.Model):
+    """Отслеживание появления/исчезновения проблемы между версиями"""
+    STATUS_CHOICES = [
+        ('NEW', 'Новая'),
+        ('PERSISTENT', 'Сохраняется'),
+        ('IMPROVED', 'Улучшилась'),
+        ('RESOLVED', 'Решена'),
+        ('REGRESSED', 'Регресс'),
+    ]
+
+    issue = models.ForeignKey(UXIssue, on_delete=models.CASCADE, related_name='lifecycles')
+    version_first_seen = models.ForeignKey(ProductVersion, on_delete=models.CASCADE, related_name='issues_first_seen')
+    version_resolved = models.ForeignKey(ProductVersion, null=True, blank=True, on_delete=models.CASCADE, related_name='issues_resolved')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    impact_change = models.FloatField(default=0.0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
 class UserCohort(models.Model):
     """Результат кластеризации: Группа пользователей с похожим поведением"""
     version = models.ForeignKey(ProductVersion, on_delete=models.CASCADE, related_name='cohorts')

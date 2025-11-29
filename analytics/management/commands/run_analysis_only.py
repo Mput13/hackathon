@@ -130,6 +130,7 @@ class Command(BaseCommand):
             ingest_cmd.stdout = self.stdout
             
             ingest_cmd.run_analysis(version, df_hits, df_visits)
+            ingest_cmd.update_issue_lifecycle(version)
             
             # Проверяем результат
             issues_count = UXIssue.objects.filter(version=version).count()
@@ -144,4 +145,3 @@ class Command(BaseCommand):
             sys.stderr.write(error_msg)
             sys.stderr.flush()
             raise
-

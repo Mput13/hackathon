@@ -17,6 +17,7 @@ urlpatterns = [
     path('api/pages/', views.api_pages, name='api_pages'),
     path('api/paths/', views.api_paths, name='api_paths'),
     path('api/issue-history/', views.api_issue_history, name='api_issue_history'),
+    path('api/goals/', views.api_goals, name='api_goals'),
     path('api/compare/', views.api_compare, name='api_compare'),
     path('api/issues/', views.api_issues, name='api_issues'),
     path('api/daily-stats/', views.api_daily_stats, name='api_daily_stats'),

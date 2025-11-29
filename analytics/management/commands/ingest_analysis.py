@@ -3,6 +3,7 @@ Helper functions extracted from ingest_data.py to keep the management command le
 They operate on the Command instance (cmd) to reuse stdout/style helpers.
 """
 import urllib.parse
+import os
 from collections import defaultdict
 import pandas as pd
 import numpy as np
@@ -11,6 +12,7 @@ from sklearn.preprocessing import StandardScaler
 from analytics.models import PageMetrics, UXIssue, UserCohort, VisitSession
 from analytics.ai_service import analyze_issue_with_ai, generate_cohort_name
 
+MIN_PAGE_VIEWS_FOR_PAGE_ALERT = int(os.environ.get("MIN_PAGE_VIEWS_FOR_PAGE_ALERT", "30"))
 
 def run_analysis(cmd, version, df_hits, df_visits):
     """Запускает анализ UX-проблем с AI-гипотезами"""
@@ -390,6 +392,42 @@ def run_analysis(cmd, version, df_hits, df_visits):
                     impact_score=min(lost_users * 0.2, 10.0),
                     ai_hypothesis=ai_text
                 ))
+
+    # H. DEAD_CLICK: страницы с высоким выходом и почти нулевым вовлечением
+    dead_candidates = PageMetrics.objects.filter(
+        version=version,
+        total_views__gte=MIN_PAGE_VIEWS_FOR_PAGE_ALERT,
+        exit_rate__gte=60,
+        avg_time_on_page__lte=5
+    ).order_by('-exit_rate')[:5]
+    for metric in dead_candidates:
+        if metric.avg_scroll_depth is not None and metric.avg_scroll_depth > 20:
+            continue
+        norm_url = normalize_issue_url(metric.url)
+        impact = min(metric.exit_rate / 8, 10.0)
+        ai_text = analyze_issue_with_ai(
+            issue_type='DEAD_CLICK',
+            location=norm_url,
+            metrics_context=f"Exit rate: {metric.exit_rate:.1f}%, Avg time: {metric.avg_time_on_page:.1f}s, Scroll: {metric.avg_scroll_depth}",
+            page_title=metric.page_title,
+            page_metrics={
+                'exit_rate': metric.exit_rate,
+                'avg_time': metric.avg_time_on_page,
+                'scroll_depth': metric.avg_scroll_depth,
+            },
+            dominant_cohort=metric.dominant_cohort,
+            dominant_device=metric.dominant_device
+        )
+        issues.append(UXIssue(
+            version=version,
+            issue_type='DEAD_CLICK',
+            severity='WARNING',
+            description=f"Похоже на мёртвые клики: выход {metric.exit_rate:.1f}%, время {metric.avg_time_on_page:.1f} с.",
+            location_url=norm_url,
+            affected_sessions=int(metric.total_views),
+            impact_score=impact,
+            ai_hypothesis=ai_text
+        ))
 
     UXIssue.objects.bulk_create(issues)
     cmd.stdout.write(f"Найдено {len(issues)} UX-проблем.")

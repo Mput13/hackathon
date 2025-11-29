@@ -1,6 +1,8 @@
+import os
+from django.conf import settings
 from django.http import JsonResponse
 from .models import UserCohort, PageMetrics, UXIssue
-from .utils import get_readable_page_name
+from .utils import get_readable_page_name, GoalParser
 from .views_helpers import _normalize_issue_url, _compute_paths
 
 
@@ -134,5 +136,12 @@ def api_issue_history(request):
 
     return JsonResponse({'count': len(results), 'results': results})
 
+def api_goals(request):
+    """JSON: список целей из goals.yaml"""
+    default_path = os.path.join(getattr(settings, 'BASE_DIR', ''), 'analytics', 'goals.yaml')
+    parser = GoalParser(config_path=default_path if os.path.exists(default_path) else 'goals.yaml')
+    goals = parser.get_goals() or []
+    return JsonResponse({'count': len(goals), 'results': goals})
 
-__all__ = ['api_cohorts', 'api_pages', 'api_paths', 'api_issue_history']
+
+__all__ = ['api_cohorts', 'api_pages', 'api_paths', 'api_issue_history', 'api_goals']

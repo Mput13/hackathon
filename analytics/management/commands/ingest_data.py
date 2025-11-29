@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from analytics.models import ProductVersion, VisitSession, PageHit, UXIssue, DailyStat, UserCohort, PageMetrics
+from analytics.models import ProductVersion, VisitSession, PageHit, UXIssue, DailyStat, UserCohort, PageMetrics, IssueLifecycle
 from datetime import datetime, timedelta
 import os
 import urllib.parse
@@ -365,6 +365,7 @@ class Command(BaseCommand):
 
             # 5. Run Analysis (Heuristics)
             self.run_analysis(version, df_hits, df_visits)
+            self.update_issue_lifecycle(version)
 
             # 6. Segment Users into Cohorts (New Logic)
             self.segment_users_into_cohorts(version, df_visits, df_hits, goals_config)
@@ -949,6 +950,42 @@ class Command(BaseCommand):
                     ai_hypothesis=ai_text
                 ))
 
+        # J. DEAD_CLICK: страницы с высоким выходом и почти нулевым вовлечением
+        dead_candidates = PageMetrics.objects.filter(
+            version=version,
+            total_views__gte=MIN_PAGE_VIEWS_FOR_PAGE_ALERT,
+            exit_rate__gte=60,
+            avg_time_on_page__lte=5
+        ).order_by('-exit_rate')[:5]
+        for metric in dead_candidates:
+            if metric.avg_scroll_depth is not None and metric.avg_scroll_depth > 20:
+                continue  # не считаем, если есть скролл
+            norm_url = normalize_issue_url(metric.url)
+            impact = min(metric.exit_rate / 8, 10.0)
+            ai_text = analyze_issue_with_ai(
+                issue_type='DEAD_CLICK',
+                location=norm_url,
+                metrics_context=f"Exit rate: {metric.exit_rate:.1f}%, Avg time: {metric.avg_time_on_page:.1f}s, Scroll: {metric.avg_scroll_depth}",
+                page_title=metric.page_title,
+                page_metrics={
+                    'exit_rate': metric.exit_rate,
+                    'avg_time': metric.avg_time_on_page,
+                    'scroll_depth': metric.avg_scroll_depth,
+                },
+                dominant_cohort=metric.dominant_cohort,
+                dominant_device=metric.dominant_device
+            )
+            issues.append(UXIssue(
+                version=version,
+                issue_type='DEAD_CLICK',
+                severity='WARNING',
+                description=f"Похоже на мёртвые клики: выход {metric.exit_rate:.1f}%, время {metric.avg_time_on_page:.1f} с.",
+                location_url=norm_url,
+                affected_sessions=int(metric.total_views),
+                impact_score=impact,
+                ai_hypothesis=ai_text
+            ))
+
         # I. SEARCH_FAIL: страницы поиска с высоким exit
         search_metrics = PageMetrics.objects.filter(
             version=version,
@@ -1354,3 +1391,79 @@ class Command(BaseCommand):
             ))
         
         DailyStat.objects.bulk_create(daily_stats, ignore_conflicts=True)
+
+    def update_issue_lifecycle(self, version):
+        """Фиксирует появление/исчезновение проблем между версиями."""
+        self.stdout.write("Updating issue lifecycle...")
+        from analytics.models import UXIssue, IssueLifecycle, ProductVersion
+
+        def norm(raw_url: str) -> str:
+            if not isinstance(raw_url, str):
+                return ""
+            parsed = urllib.parse.urlparse(raw_url.strip())
+            netloc = parsed.netloc.lower()
+            path = (parsed.path or "/").rstrip("/") or "/"
+            query_dict = urllib.parse.parse_qs(parsed.query, keep_blank_values=False)
+            for noisy in ['referer', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'yclid', '_openstat', 'from', 'ref']:
+                query_dict.pop(noisy, None)
+            clean_query = urllib.parse.urlencode({k: v[0] if len(v) == 1 else v for k, v in query_dict.items()}, doseq=True)
+            scheme = parsed.scheme.lower() if parsed.scheme else ("https" if netloc else "")
+            if netloc or scheme:
+                return urllib.parse.urlunparse((scheme, netloc, path, '', clean_query, ''))
+            return path + (f"?{clean_query}" if clean_query else "")
+
+        prev_version = ProductVersion.objects.filter(release_date__lt=version.release_date).order_by('-release_date').first()
+        # очищаем записи для пересчета
+        IssueLifecycle.objects.filter(version_first_seen=version).delete()
+        IssueLifecycle.objects.filter(version_resolved=version).delete()
+
+        current = UXIssue.objects.filter(version=version)
+        prev = UXIssue.objects.none()
+        if prev_version:
+            prev = UXIssue.objects.filter(version=prev_version)
+
+        prev_index = {(iss.issue_type, norm(iss.location_url)): iss for iss in prev}
+        current_index = {(iss.issue_type, norm(iss.location_url)): iss for iss in current}
+
+        lifecycles = []
+        for key, issue in current_index.items():
+            prev_issue = prev_index.get(key)
+            if prev_issue:
+                diff = (issue.impact_score or 0) - (prev_issue.impact_score or 0)
+                if diff > 1:
+                    status = 'REGRESSED'
+                elif diff < -1:
+                    status = 'IMPROVED'
+                else:
+                    status = 'PERSISTENT'
+                lifecycles.append(IssueLifecycle(
+                    issue=issue,
+                    version_first_seen=prev_issue.version,
+                    version_resolved=None,
+                    status=status,
+                    impact_change=diff
+                ))
+            else:
+                lifecycles.append(IssueLifecycle(
+                    issue=issue,
+                    version_first_seen=version,
+                    version_resolved=None,
+                    status='NEW',
+                    impact_change=issue.impact_score or 0
+                ))
+
+        for key, prev_issue in prev_index.items():
+            if key not in current_index:
+                lifecycles.append(IssueLifecycle(
+                    issue=prev_issue,
+                    version_first_seen=prev_issue.version,
+                    version_resolved=version,
+                    status='RESOLVED',
+                    impact_change=-(prev_issue.impact_score or 0)
+                ))
+
+        if lifecycles:
+            IssueLifecycle.objects.bulk_create(lifecycles)
+            self.stdout.write(f"Lifecycle entries created: {len(lifecycles)}")
+        else:
+            self.stdout.write("No lifecycle changes detected.")

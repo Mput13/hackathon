@@ -13,7 +13,7 @@ from .views_helpers import (
 from .views_dashboard import dashboard, api_dashboard
 from .views_compare import compare_versions, api_compare
 from .views_issues import issues_list, api_versions, api_issues, api_daily_stats
-from .views_api_extra import api_cohorts, api_pages, api_paths, api_issue_history
+from .views_api_extra import api_cohorts, api_pages, api_paths, api_issue_history, api_goals
 from .views_funnels import (
     funnels_list, 
     funnel_detail, 
@@ -50,6 +50,7 @@ __all__ = [
     "api_pages",
     "api_paths",
     "api_issue_history",
+    "api_goals",
     "funnels_list",
     "funnel_detail",
     "funnel_create",

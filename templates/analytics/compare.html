@@ -53,6 +53,149 @@
         </div>
     </div>
 
+    <!-- Device split -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+        <div class="flex items-center justify-between mb-4">
+            <h4 class="text-sm font-bold text-gray-700 uppercase tracking-wider">Device Split</h4>
+            <div class="text-xs text-gray-500">Share, Bounce, Time (Δ)</div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 text-gray-500 uppercase text-xs">
+                    <tr>
+                        <th class="px-3 py-2 text-left">Device</th>
+                        <th class="px-3 py-2 text-right">Share Δ (p.p.)</th>
+                        <th class="px-3 py-2 text-right">Bounce Δ (p.p.)</th>
+                        <th class="px-3 py-2 text-right">Duration Δ (s)</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for d in comparison.device_split %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-3 py-2 font-medium text-gray-800">{{ d.device|title }}</td>
+                        <td class="px-3 py-2 text-right {% if d.share_diff > 0 %}text-green-600{% elif d.share_diff < 0 %}text-red-600{% endif %}">
+                            {% if d.share_diff > 0 %}+{% endif %}{{ d.share_diff }}
+                            <span class="text-xs text-gray-400">({{ d.share_v1 }}% → {{ d.share_v2 }}%)</span>
+                        </td>
+                        <td class="px-3 py-2 text-right {% if d.bounce_diff > 0 %}text-red-600{% elif d.bounce_diff < 0 %}text-green-600{% endif %}">
+                            {% if d.bounce_diff > 0 %}+{% endif %}{{ d.bounce_diff }}
+                            <span class="text-xs text-gray-400">({{ d.bounce_v1 }}% → {{ d.bounce_v2 }}%)</span>
+                        </td>
+                        <td class="px-3 py-2 text-right {% if d.duration_diff > 0 %}text-green-600{% elif d.duration_diff < 0 %}text-red-600{% endif %}">
+                            {% if d.duration_diff > 0 %}+{% endif %}{{ d.duration_diff }}
+                            <span class="text-xs text-gray-400">({{ d.duration_v1 }}s → {{ d.duration_v2 }}s)</span>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="4" class="px-3 py-4 text-center text-gray-400">No device data.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+
+    <!-- Browser split -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+        <div class="flex items-center justify-between mb-4">
+            <h4 class="text-sm font-bold text-gray-700 uppercase tracking-wider">Browser Split</h4>
+            <div class="text-xs text-gray-500">Top browsers, delta</div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 text-gray-500 uppercase text-xs">
+                    <tr>
+                        <th class="px-3 py-2 text-left">Browser</th>
+                        <th class="px-3 py-2 text-right">Share Δ (p.p.)</th>
+                        <th class="px-3 py-2 text-right">Bounce Δ (p.p.)</th>
+                        <th class="px-3 py-2 text-right">Duration Δ (s)</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for b in comparison.browser_split %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-3 py-2 font-medium text-gray-800">{{ b.browser|title }}</td>
+                        <td class="px-3 py-2 text-right {% if b.share_diff > 0 %}text-green-600{% elif b.share_diff < 0 %}text-red-600{% endif %}">
+                            {% if b.share_diff > 0 %}+{% endif %}{{ b.share_diff }}
+                            <span class="text-xs text-gray-400">({{ b.share_v1 }}% → {{ b.share_v2 }}%)</span>
+                        </td>
+                        <td class="px-3 py-2 text-right {% if b.bounce_diff > 0 %}text-red-600{% elif b.bounce_diff < 0 %}text-green-600{% endif %}">
+                            {% if b.bounce_diff > 0 %}+{% endif %}{{ b.bounce_diff }}
+                            <span class="text-xs text-gray-400">({{ b.bounce_v1 }}% → {{ b.bounce_v2 }}%)</span>
+                        </td>
+                        <td class="px-3 py-2 text-right {% if b.duration_diff > 0 %}text-green-600{% elif b.duration_diff < 0 %}text-red-600{% endif %}">
+                            {% if b.duration_diff > 0 %}+{% endif %}{{ b.duration_diff }}
+                            <span class="text-xs text-gray-400">({{ b.duration_v1 }}s → {{ b.duration_v2 }}s)</span>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="4" class="px-3 py-4 text-center text-gray-400">No browser data.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- OS split -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+        <div class="flex items-center justify-between mb-4">
+            <h4 class="text-sm font-bold text-gray-700 uppercase tracking-wider">OS Split</h4>
+            <div class="text-xs text-gray-500">Top OS, delta</div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 text-gray-500 uppercase text-xs">
+                    <tr>
+                        <th class="px-3 py-2 text-left">OS</th>
+                        <th class="px-3 py-2 text-right">Share Δ (p.p.)</th>
+                        <th class="px-3 py-2 text-right">Bounce Δ (p.p.)</th>
+                        <th class="px-3 py-2 text-right">Duration Δ (s)</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for o in comparison.os_split %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-3 py-2 font-medium text-gray-800">{{ o.os|title }}</td>
+                        <td class="px-3 py-2 text-right {% if o.share_diff > 0 %}text-green-600{% elif o.share_diff < 0 %}text-red-600{% endif %}">
+                            {% if o.share_diff > 0 %}+{% endif %}{{ o.share_diff }}
+                            <span class="text-xs text-gray-400">({{ o.share_v1 }}% → {{ o.share_v2 }}%)</span>
+                        </td>
+                        <td class="px-3 py-2 text-right {% if o.bounce_diff > 0 %}text-red-600{% elif o.bounce_diff < 0 %}text-green-600{% endif %}">
+                            {% if o.bounce_diff > 0 %}+{% endif %}{{ o.bounce_diff }}
+                            <span class="text-xs text-gray-400">({{ o.bounce_v1 }}% → {{ o.bounce_v2 }}%)</span>
+                        </td>
+                        <td class="px-3 py-2 text-right {% if o.duration_diff > 0 %}text-green-600{% elif o.duration_diff < 0 %}text-red-600{% endif %}">
+                            {% if o.duration_diff > 0 %}+{% endif %}{{ o.duration_diff }}
+                            <span class="text-xs text-gray-400">({{ o.duration_v1 }}s → {{ o.duration_v2 }}s)</span>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="4" class="px-3 py-4 text-center text-gray-400">No OS data.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Alerts -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+        <div class="flex items-center justify-between mb-4">
+            <h4 class="text-sm font-bold text-gray-700 uppercase tracking-wider">Alerts</h4>
+            <div class="text-xs text-gray-500">New critical issues / exit spikes</div>
+        </div>
+        <div class="space-y-2 text-sm">
+            {% for a in comparison.alerts %}
+            <div class="p-3 rounded border {% if a.severity == 'critical' %}border-red-200 bg-red-50 text-red-700{% else %}border-amber-200 bg-amber-50 text-amber-700{% endif %}">
+                <div class="font-semibold">{{ a.type|title }}</div>
+                <div>{{ a.message }}</div>
+                {% if a.url %}<div class="text-xs text-gray-500 break-all">{{ a.url }}</div>{% endif %}
+            </div>
+            {% empty %}
+            <div class="text-gray-400 text-xs">No alerts</div>
+            {% endfor %}
+        </div>
+    </div>
+
     <!-- Issues diff -->
     <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
         <div class="flex items-center justify-between mb-4">
@@ -164,6 +307,42 @@
             {% empty %}
             <p class="text-center text-gray-400 text-sm">No cohort differences.</p>
             {% endfor %}
+        </div>
+    </div>
+
+    <!-- Paths -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+        <div class="flex items-center justify-between mb-4">
+            <h4 class="text-sm font-bold text-gray-700 uppercase tracking-wider">Top Paths (2–3 steps)</h4>
+            <div class="text-xs text-gray-500">By frequency</div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+                <h5 class="text-xs font-semibold text-gray-500 mb-2">{{ comparison.v1.name }}</h5>
+                <div class="space-y-2">
+                    {% for p in comparison.paths_v1 %}
+                    <div class="p-3 bg-gray-50 rounded border border-gray-100">
+                        <div class="text-sm text-indigo-600 font-medium">{{ p.path }}</div>
+                        <div class="text-xs text-gray-500 mt-1">Count: {{ p.count }}, Users: {{ p.unique_users }}</div>
+                    </div>
+                    {% empty %}
+                    <p class="text-gray-400 text-xs">No paths.</p>
+                    {% endfor %}
+                </div>
+            </div>
+            <div>
+                <h5 class="text-xs font-semibold text-indigo-500 mb-2">{{ comparison.v2.name }}</h5>
+                <div class="space-y-2">
+                    {% for p in comparison.paths_v2 %}
+                    <div class="p-3 bg-indigo-50 rounded border border-indigo-100">
+                        <div class="text-sm text-indigo-700 font-medium">{{ p.path }}</div>
+                        <div class="text-xs text-gray-600 mt-1">Count: {{ p.count }}, Users: {{ p.unique_users }}</div>
+                    </div>
+                    {% empty %}
+                    <p class="text-gray-400 text-xs">No paths.</p>
+                    {% endfor %}
+                </div>
+            </div>
         </div>
     </div>
 

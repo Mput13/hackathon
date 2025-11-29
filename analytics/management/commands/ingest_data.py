@@ -828,7 +828,8 @@ class Command(BaseCommand):
             step1_users = set(df_hits[df_hits['norm_url'] == step1_url]['ym:pv:clientID'])
             step2_users = set(df_hits[df_hits['norm_url'] == step2_url]['ym:pv:clientID'])
             
-            if step1_users:
+            # Порог по количеству, чтобы не создавать шумные дропы
+            if step1_users and len(step1_users) >= 50:
                 conversion = len(step2_users & step1_users) / len(step1_users)
                 
                 if conversion < 0.3:  # <30% конверсия = критическая точка

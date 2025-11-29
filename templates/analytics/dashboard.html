@@ -49,6 +49,50 @@
                 Compare Version &rarr;
             </a>
         </div>
+
+        <!-- Device split -->
+        <div class="mt-4">
+            <h4 class="text-xs font-semibold text-gray-500 mb-2">By Device</h4>
+            <div class="space-y-1 text-xs text-gray-600">
+                {% for d in stat.device_split %}
+                <div class="flex justify-between">
+                    <span>{{ d.device|title }} ({{ d.share }}%)</span>
+                    <span class="text-gray-800">Bounce {{ d.bounce_rate }}% · {{ d.avg_duration }}s</span>
+                </div>
+                {% empty %}
+                <div class="text-gray-400 italic">No data</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Browser split -->
+        <div class="mt-4">
+            <h4 class="text-xs font-semibold text-gray-500 mb-2">Top Browsers</h4>
+            <div class="space-y-1 text-xs text-gray-600">
+                {% for b in stat.browser_split %}
+                <div class="flex justify-between">
+                    <span>{{ b.browser|title }} ({{ b.share }}%)</span>
+                    <span class="text-gray-800">Bounce {{ b.bounce_rate }}% · {{ b.avg_duration }}s</span>
+                </div>
+                {% empty %}
+                <div class="text-gray-400 italic">No data</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Alerts -->
+        <div class="mt-4">
+            <h4 class="text-xs font-semibold text-gray-500 mb-2">Alerts</h4>
+            <div class="space-y-1 text-xs">
+                {% for a in stat.alerts %}
+                <div class="p-2 rounded border {% if a.severity == 'critical' %}border-red-200 bg-red-50 text-red-700{% else %}border-amber-200 bg-amber-50 text-amber-700{% endif %}">
+                    <span class="font-semibold">{{ a.type|title }}</span>: {{ a.message }}
+                </div>
+                {% empty %}
+                <div class="text-gray-400 italic">No alerts</div>
+                {% endfor %}
+            </div>
+        </div>
     </div>
     {% endfor %}
 

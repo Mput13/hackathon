@@ -108,19 +108,35 @@ docker-compose exec web python manage.py ingest_data \
 *   **Compare:** Сравните v1.0 и v2.0, чтобы увидеть изменения.
 *   **Issues:** Полный список проблем с рекомендациями AI.
 
-## 🔌 API для фронтенда
+## 🔌 API для фронтенда (детально)
 
-Бэкенд отдает все данные в JSON, чтобы фронтенд можно было собрать отдельно.
+Все ответы — JSON. URL нормализуются на бэкенде (normalize_issue_url), канонизируются back-петли A↔B.
 
-*   `GET /api/versions/` — список версий продукта.
-*   `GET /api/dashboard/` — агрегаты по версиям + 5 последних проблем.
-*   `GET /api/compare/?v1=<id>&v2=<id>` — сравнение двух версий; если не передать, берутся самые старшая и последняя.
-*   `GET /api/issues/?version=<id>&severity=CRITICAL&issue_type=RAGE_CLICK` — список UX-проблем с фильтрами (версия, уровень, тип).
-*   `GET /api/daily-stats/?version=<id>` — таймсерия по дням для графиков (сессии, отказы, bounce rate, средняя длительность, extra_data).
+- `GET /api/versions/` — список версий `{id,name,release_date,is_active}`.
+- `GET /api/dashboard/` — агрегаты по всем версиям:
+  - `version_stats`: `{id,name,release_date,total_visits,avg_duration,bounce_rate,issue_count,critical_issues,device_split, browser_split, alerts}`
+    - `device_split`: по `device_category` (desktop/mobile/tablet/tv/unknown) — visits, share%, bounce%, avg_duration.
+    - `browser_split`: топ браузеров — visits, share%, bounce%, avg_duration.
+    - `alerts`: новые CRITICAL issues и страницы с высоким exit/bounce (средний трафик).
+  - `recent_issues`: последние 5 проблем с routing полями (trend/priority/recommended_specialists/detected_version_name).
+- `GET /api/compare/?v1=<id>&v2=<id>` — полное сравнение двух версий (если не заданы — первая и последняя):
+  - `stats_v1/v2`: visits, bounce%, duration.
+  - `issues_diff`: new/worse/improved/resolved с impact_diff, location_readable, routing полями.
+  - `pages_diff`: new/removed/changed, delta exit/time, norm URL, фильтр малотрафиковых.
+  - `cohorts_diff`: new/removed/changed, доля аудитории в %.
+  - `device_split`, `browser_split`, `os_split`: share/bounce/duration + дельты (p.p., s).
+  - `paths_v1/paths_v2`: топ путей 2–3 шага (norm URL), count, unique_users (по session_id).
+  - `alerts`: новые CRITICAL issues и рост exit на страницах (порог >10 п.п.).
+- `GET /api/issues/?version=<id>&severity=&issue_type=` — список проблем с readable_location, trend_label, priority, recommended_specialists.
+- `GET /api/daily-stats/?version=<id>` — таймсерия по дням: total_sessions, total_bounces, bounce_rate, avg_duration, extra_data.
+- `GET /api/cohorts/?version=<id>` — когорты версии: name, percentage (0–100), bounce/duration/depth, metrics, conversion_rates.
+- `GET /api/pages/?version=<id>&limit=50&min_views=0&order=-exit_rate` — метрики страниц: url, norm_url, readable, exit/bounce/avg_time/scroll, views, dominant_device/cohort.
+- `GET /api/paths/?version=<id>&limit=20&min_count=5` — топ путей (2–3 шага, norm URL), count, unique_users (по session_id).
+- `GET /api/issue-history/?issue_type=&norm_url=` — “жизненный цикл” проблем: группировка по (issue_type, norm_url) с наблюдениями по версиям/дате (impact, affected, trend, priority).
 
-Пример запроса c curl:
+Пример запроса:
 ```bash
-curl http://localhost:8000/api/dashboard/
+curl "http://localhost:8000/api/compare/?v1=1&v2=2"
 ```
 
 ## 🧩 Структура проекта

@@ -80,7 +80,7 @@ def run_analysis(cmd, version, df_hits, df_visits):
                 version=version,
                 issue_type='RAGE_CLICK',
                 severity='WARNING',
-                description=f"Detected {count} rapid reloads/clicks on this page.",
+                description=f"Обнаружены {count} быстрых повторных кликов/перезагрузок на странице.",
                 location_url=norm_url,
                 affected_sessions=count,
                 impact_score=impact,
@@ -121,7 +121,7 @@ def run_analysis(cmd, version, df_hits, df_visits):
                 version=version,
                 issue_type='LOOPING',
                 severity='WARNING',
-                description=f"Users keep returning to this page ({count} loop events).",
+                description=f"Пользователи возвращаются на эту страницу (циклов: {count}).",
                 location_url=norm_url,
                 affected_sessions=count,
                 impact_score=impact,
@@ -163,7 +163,7 @@ def run_analysis(cmd, version, df_hits, df_visits):
                     version=version,
                     issue_type='WANDERING',
                     severity='WARNING',
-                    description=f"Users wander through {avg_depth:.1f} pages on average without achieving goals.",
+                    description=f"Пользователи блуждают по {avg_depth:.1f} страницам без достижения целей.",
                     location_url=entry_page,
                     affected_sessions=count,
                     impact_score=min(count * 0.1, 10.0),
@@ -234,7 +234,7 @@ def run_analysis(cmd, version, df_hits, df_visits):
                     version=version,
                     issue_type='NAVIGATION_BACK',
                     severity='WARNING',
-                    description=f"Users bounce through loop {loop_path} ({pattern_count} back patterns, {users_count} users).",
+                    description=f"Пользователи ходят по петле {loop_path} ({pattern_count} паттернов, {users_count} пользователей).",
                     location_url=loop_path,
                     affected_sessions=users_count,
                     impact_score=impact,
@@ -278,7 +278,7 @@ def run_analysis(cmd, version, df_hits, df_visits):
                 version=version,
                 issue_type='HIGH_BOUNCE',
                 severity='CRITICAL',
-                description=f"High bounce rate detected. {count} users left immediately.",
+                description=f"Высокий отскок: {count} пользователей ушли сразу.",
                 location_url=norm_url,
                 affected_sessions=count,
                 impact_score=impact,
@@ -294,16 +294,27 @@ def run_analysis(cmd, version, df_hits, df_visits):
     form_hits = df_hits[df_hits['ym:pv:URL'].astype(str).str.contains(form_pattern, na=False, regex=True)]
 
     if not form_hits.empty:
-        form_sessions = form_hits.groupby('ym:pv:clientID').agg({
-            'ym:pv:dateTime': ['min', 'max'],
-            'ym:pv:URL': 'first'
-        })
-        form_sessions.columns = ['min_time', 'max_time', 'url']
+        # Нормализуем время и делим на «квазисессии» с разрывом >30 минут, чтобы не суммировать дни
+        form_hits = form_hits.copy()
+        form_hits['ym:pv:dateTime'] = pd.to_datetime(form_hits['ym:pv:dateTime'], utc=True, errors='coerce')
+        form_hits = form_hits.dropna(subset=['ym:pv:dateTime'])
+        form_hits = form_hits.sort_values(['ym:pv:clientID', 'ym:pv:dateTime'])
+        form_hits['time_diff'] = form_hits.groupby('ym:pv:clientID')['ym:pv:dateTime'].diff().dt.total_seconds().fillna(0)
+        form_hits['session_group'] = form_hits.groupby('ym:pv:clientID')['time_diff'].transform(lambda x: (x > 1800).cumsum())
+        form_hits['session_key'] = form_hits['ym:pv:clientID'].astype(str) + "_" + form_hits['session_group'].astype(str)
+
+        form_sessions = form_hits.groupby('session_key').agg(
+            client_id=('ym:pv:clientID', 'first'),
+            url=('ym:pv:URL', 'first'),
+            min_time=('ym:pv:dateTime', 'min'),
+            max_time=('ym:pv:dateTime', 'max'),
+        )
         form_sessions['duration'] = (form_sessions['max_time'] - form_sessions['min_time']).dt.total_seconds()
+        form_sessions = form_sessions[form_sessions['duration'] <= 7200]
 
         long_form = form_sessions[form_sessions['duration'] > 60]
         if not long_form.empty:
-            long_form_clients = long_form.index
+            long_form_clients = long_form['client_id']
             if 'ym:s:goalsID' in df_visits.columns:
                 has_goals = df_visits[
                     df_visits['ym:s:clientID'].isin(long_form_clients) &
@@ -315,7 +326,7 @@ def run_analysis(cmd, version, df_hits, df_visits):
                 problem_clients = set(long_form_clients)
 
             if problem_clients:
-                form_urls = long_form[long_form.index.isin(problem_clients)]['url'].value_counts().head(5)
+                form_urls = long_form[long_form['client_id'].isin(problem_clients)]['url'].value_counts().head(5)
                 for url, count in form_urls.items():
                     norm_url = normalize_issue_url(url)
                     page_metrics = PageMetrics.objects.filter(version=version, url=norm_url or url).first()
@@ -335,7 +346,7 @@ def run_analysis(cmd, version, df_hits, df_visits):
                         version=version,
                         issue_type='FORM_FIELD_ERRORS',
                         severity='WARNING',
-                        description=f"Users spend {avg_duration:.1f}s on form but don't submit ({count} sessions).",
+                        description=f"Пользователи проводят {avg_duration:.1f} с на форме и не отправляют (сессий: {count}).",
                         location_url=norm_url or url,
                         affected_sessions=count,
                         impact_score=min(count * 0.15, 10.0),
@@ -373,7 +384,7 @@ def run_analysis(cmd, version, df_hits, df_visits):
                     version=version,
                     issue_type='FUNNEL_DROPOFF',
                     severity='CRITICAL',
-                    description=f"Critical drop between {step1_url} and {step2_url}. Conversion: {conversion*100:.1f}%.",
+                    description=f"Критический отвал между {step1_url} и {step2_url}. Конверсия: {conversion*100:.1f}%.",
                     location_url=step1_url,
                     affected_sessions=lost_users,
                     impact_score=min(lost_users * 0.2, 10.0),
@@ -381,7 +392,7 @@ def run_analysis(cmd, version, df_hits, df_visits):
                 ))
 
     UXIssue.objects.bulk_create(issues)
-    cmd.stdout.write(f"Detected {len(issues)} UX issues.")
+    cmd.stdout.write(f"Найдено {len(issues)} UX-проблем.")
 
 
 def segment_users_into_cohorts(cmd, version, df_visits, df_hits, goals_config):

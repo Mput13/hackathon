@@ -12,6 +12,9 @@ import traceback
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 
+MIN_PAGE_VIEWS_FOR_PAGE_ALERT = int(os.environ.get("MIN_PAGE_VIEWS_FOR_PAGE_ALERT", "30"))
+MIN_WANDERING_SESSIONS = int(os.environ.get("MIN_WANDERING_SESSIONS", "5"))
+
 class Command(BaseCommand):
     help = 'Ingests Parquet data from Yandex Metrica and runs UX analysis'
 
@@ -584,7 +587,7 @@ class Command(BaseCommand):
                     version=version,
                     issue_type='RAGE_CLICK',
                     severity='WARNING',
-                    description=f"Detected {count} rapid reloads/clicks on this page.",
+                description=f"Обнаружены {count} быстрых повторных кликов/перезагрузок на странице.",
                     location_url=norm_url,
                     affected_sessions=count,
                     impact_score=impact,
@@ -625,7 +628,7 @@ class Command(BaseCommand):
                     version=version,
                     issue_type='LOOPING',
                     severity='WARNING',
-                    description=f"Users keep returning to this page ({count} loop events).",
+                    description=f"Пользователи возвращаются на эту страницу (циклов: {count}).",
                     location_url=norm_url,
                     affected_sessions=count,
                     impact_score=impact,
@@ -649,6 +652,9 @@ class Command(BaseCommand):
                 for entry_page, count in wandering_by_page.head(5).items():
                     if not entry_page:
                         continue
+                    # Отсеиваем шум: слишком мало сессий
+                    if count < MIN_WANDERING_SESSIONS:
+                        continue
                     # Получаем метрики страницы
                     page_metrics = PageMetrics.objects.filter(version=version, url=entry_page).first()
                     avg_depth = wandering_visits[wandering_visits['norm_start_url'] == entry_page]['ym:s:pageViews'].mean()
@@ -668,7 +674,7 @@ class Command(BaseCommand):
                         version=version,
                         issue_type='WANDERING',
                         severity='WARNING',
-                        description=f"Users wander through {avg_depth:.1f} pages on average without achieving goals.",
+                        description=f"Пользователи блуждают по {avg_depth:.1f} страницам без достижения целей.",
                         location_url=entry_page,
                         affected_sessions=count,
                         impact_score=min(count * 0.1, 10.0),
@@ -747,7 +753,7 @@ class Command(BaseCommand):
                         version=version,
                         issue_type='NAVIGATION_BACK',
                         severity='WARNING',
-                        description=f"Users bounce through loop {loop_path} ({pattern_count} back patterns, {users_count} users).",
+                        description=f"Пользователи ходят по петле {loop_path} ({pattern_count} паттернов, {users_count} пользователей).",
                         location_url=loop_path,
                         affected_sessions=users_count,
                         impact_score=impact,
@@ -791,7 +797,7 @@ class Command(BaseCommand):
                     version=version,
                     issue_type='HIGH_BOUNCE',
                     severity='CRITICAL',
-                    description=f"High bounce rate detected. {count} users left immediately.",
+                    description=f"Высокий отскок: {count} пользователей ушли сразу.",
                     location_url=norm_url,
                     affected_sessions=count,
                     impact_score=impact,
@@ -807,18 +813,29 @@ class Command(BaseCommand):
         form_hits = df_hits[df_hits['ym:pv:URL'].astype(str).str.contains(form_pattern, na=False, regex=True)]
         
         if not form_hits.empty:
-            # Группируем по clientID, считаем время на форме
-            form_sessions = form_hits.groupby('ym:pv:clientID').agg({
-                'ym:pv:dateTime': ['min', 'max'],
-                'ym:pv:URL': 'first'
-            })
-            form_sessions.columns = ['min_time', 'max_time', 'url']
+            # Нормализуем время и режем на «квазисессии» с разрывом >30 минут, чтобы не суммировать дни
+            form_hits = form_hits.copy()
+            form_hits['ym:pv:dateTime'] = pd.to_datetime(form_hits['ym:pv:dateTime'], utc=True, errors='coerce')
+            form_hits = form_hits.dropna(subset=['ym:pv:dateTime'])
+            form_hits = form_hits.sort_values(['ym:pv:clientID', 'ym:pv:dateTime'])
+            form_hits['time_diff'] = form_hits.groupby('ym:pv:clientID')['ym:pv:dateTime'].diff().dt.total_seconds().fillna(0)
+            form_hits['session_group'] = form_hits.groupby('ym:pv:clientID')['time_diff'].transform(lambda x: (x > 1800).cumsum())
+            form_hits['session_key'] = form_hits['ym:pv:clientID'].astype(str) + "_" + form_hits['session_group'].astype(str)
+
+            form_sessions = form_hits.groupby('session_key').agg(
+                client_id=('ym:pv:clientID', 'first'),
+                url=('ym:pv:URL', 'first'),
+                min_time=('ym:pv:dateTime', 'min'),
+                max_time=('ym:pv:dateTime', 'max'),
+            )
             form_sessions['duration'] = (form_sessions['max_time'] - form_sessions['min_time']).dt.total_seconds()
+            # Отсекаем явно сломанные длительности (>2 часов)
+            form_sessions = form_sessions[form_sessions['duration'] <= 7200]
             
             # Долго на форме (>60 сек) и нет цели
             long_form = form_sessions[form_sessions['duration'] > 60]
             if not long_form.empty:
-                long_form_clients = long_form.index
+                long_form_clients = long_form['client_id']
                 # Проверяем, есть ли у этих пользователей goals
                 if 'ym:s:goalsID' in df_visits.columns:
                     has_goals = df_visits[
@@ -831,7 +848,7 @@ class Command(BaseCommand):
                     problem_clients = set(long_form_clients)
                 
                 if problem_clients:
-                    form_urls = long_form[long_form.index.isin(problem_clients)]['url'].value_counts().head(5)
+                    form_urls = long_form[long_form['client_id'].isin(problem_clients)]['url'].value_counts().head(5)
                     for url, count in form_urls.items():
                         norm_url = normalize_issue_url(url)
                         page_metrics = PageMetrics.objects.filter(version=version, url=norm_url or url).first()
@@ -851,7 +868,7 @@ class Command(BaseCommand):
                             version=version,
                             issue_type='FORM_FIELD_ERRORS',
                             severity='WARNING',
-                            description=f"Users spend {avg_duration:.1f}s on form but don't submit ({count} sessions).",
+                            description=f"Пользователи проводят {avg_duration:.1f} с на форме и не отправляют (сессий: {count}).",
                             location_url=norm_url or url,
                             affected_sessions=count,
                             impact_score=min(count * 0.15, 10.0),
@@ -891,7 +908,7 @@ class Command(BaseCommand):
                         version=version,
                         issue_type='FUNNEL_DROPOFF',
                         severity='CRITICAL',
-                        description=f"Critical drop-off: only {conversion*100:.1f}% proceed from {step1_url} to {step2_url}.",
+                        description=f"Критический отвал: только {conversion*100:.1f}% переходят с {step1_url} на {step2_url}.",
                         location_url=step1_url,
                         affected_sessions=lost_users,
                         impact_score=min(lost_users * 0.2, 10.0),
@@ -901,7 +918,8 @@ class Command(BaseCommand):
         # H. SCAN_AND_DROP: высокие выходы при глубоком скролле и коротком времени
         scan_drop_candidates = PageMetrics.objects.filter(
             version=version,
-            avg_scroll_depth__gte=80
+            avg_scroll_depth__gte=80,
+            total_views__gte=MIN_PAGE_VIEWS_FOR_PAGE_ALERT
         ).order_by('-exit_rate')[:5]
         for metric in scan_drop_candidates:
             if metric.exit_rate and metric.exit_rate > 70 and metric.avg_time_on_page < 30:
@@ -924,7 +942,7 @@ class Command(BaseCommand):
                     version=version,
                     issue_type='SCAN_AND_DROP',
                     severity='WARNING',
-                    description=f"Users scan and leave quickly (exit {metric.exit_rate:.1f}%, time {metric.avg_time_on_page:.1f}s).",
+                    description=f"Быстрый просмотр и уход (выход {metric.exit_rate:.1f}%, время {metric.avg_time_on_page:.1f} с).",
                     location_url=norm_url,
                     affected_sessions=int(metric.total_views),
                     impact_score=impact,
@@ -932,7 +950,11 @@ class Command(BaseCommand):
                 ))
 
         # I. SEARCH_FAIL: страницы поиска с высоким exit
-        search_metrics = PageMetrics.objects.filter(version=version, url__icontains='search').order_by('-exit_rate')[:5]
+        search_metrics = PageMetrics.objects.filter(
+            version=version,
+            url__icontains='search',
+            total_views__gte=MIN_PAGE_VIEWS_FOR_PAGE_ALERT
+        ).order_by('-exit_rate')[:5]
         for metric in search_metrics:
             if metric.exit_rate and metric.exit_rate > 70:
                 norm_url = normalize_issue_url(metric.url)
@@ -953,7 +975,7 @@ class Command(BaseCommand):
                     version=version,
                     issue_type='SEARCH_FAIL',
                     severity='WARNING',
-                    description=f"Search page has high exits ({metric.exit_rate:.1f}% exit rate).",
+                    description=f"Страница поиска с высоким выходом ({metric.exit_rate:.1f}%).",
                     location_url=norm_url,
                     affected_sessions=int(metric.total_views),
                     impact_score=impact,
@@ -961,7 +983,7 @@ class Command(BaseCommand):
                 ))
 
         UXIssue.objects.bulk_create(issues)
-        self.stdout.write(f"Detected {len(issues)} UX issues.")
+        self.stdout.write(f"Найдено {len(issues)} UX-проблем.")
 
     def build_previous_issue_index(self, version):
         """
@@ -1124,7 +1146,7 @@ class Command(BaseCommand):
 
         # 3. Clustering (ML)
         if user_behavior.empty:
-            self.stdout.write("No users to segment.")
+            self.stdout.write("Нет пользователей для сегментации.")
             return
 
         self.stdout.write("Running K-Means...")
@@ -1306,7 +1328,7 @@ class Command(BaseCommand):
                 conversion_rates=conversions,
                 member_client_ids=cohort_client_ids  # Сохраняем client_ids для воронок
             )
-            self.stdout.write(f"Saved cohort: {final_name} ({total_users} users)")
+            self.stdout.write(f"Сохранена когорта: {final_name} ({total_users} пользователей)")
 
     def calculate_daily_stats(self, version):
         self.stdout.write("Calculating daily stats...")

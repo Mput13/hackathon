@@ -5,6 +5,12 @@ try:
     import requests
 except ImportError:
     requests = None
+# Пытаемся подхватить .env, чтобы FOLDER_ID/API_KEY были доступны в любом окружении
+try:
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=os.environ.get("ENV_FILE", ".env"))
+except Exception:
+    pass
 
 # Human-readable examples (подсказки, не жесткие определения)
 ISSUE_EXAMPLES = {
@@ -21,6 +27,20 @@ ISSUE_EXAMPLES = {
 # Получаем креды из ENV
 FOLDER_ID = os.environ.get("FOLDER_ID") or os.environ.get("folder_id")
 API_KEY = os.environ.get("API_KEY") or os.environ.get("api_key")
+
+STUB_TEMPLATES = {
+    'RAGE_CLICK': "Гипотеза: Клик по элементу без отклика или долгая загрузка. Исправить: добавить явный ховер/спиннер и связать действие с корректным обработчиком.",
+    'DEAD_CLICK': "Гипотеза: Клик по нерабочей ссылке/кнопке. Исправить: убрать мёртвый элемент или привязать к реальному действию/редиректу.",
+    'HIGH_BOUNCE': "Гипотеза: Первый экран не совпадает с ожиданием трафика или грузится медленно. Исправить: обновить H1/hero под источник и оптимизировать LCP.",
+    'LOOPING': "Гипотеза: Пользователь не находит целевое действие и ходит по одному пути. Исправить: упростить путь, добавить заметный CTA и прямой линк на целевую страницу.",
+    'FORM_ABANDON': "Гипотеза: Слишком много полей или ранний запрос чувствительных данных. Исправить: сократить форму и разделить на шаги с прогрессом.",
+    'WANDERING': "Гипотеза: Пользователи блуждают по сайту без четкой цели. Исправить: добавить навигационные подсказки и вынести ключевые действия на главную.",
+    'NAVIGATION_BACK': "Гипотеза: Пользователи часто возвращаются назад, не находя нужную информацию. Исправить: подсветить ключевые ссылки и явно вести к целевым страницам.",
+    'FORM_FIELD_ERRORS': "Гипотеза: Пользователи долго заполняют форму, возможно, исправляют ошибки. Исправить: добавить валидацию в реальном времени и подсказки к полям.",
+    'FUNNEL_DROPOFF': "Гипотеза: Критическая точка отвала в воронке конверсии. Исправить: упростить переход между шагами и добавить прогресс-бар.",
+    'SCAN_AND_DROP': "Гипотеза: Страница не дает ответа, пользователь быстро скроллит и уходит. Исправить: вынести ключевое действие/ответ в верхний экран.",
+    'SEARCH_FAIL': "Гипотеза: Результаты поиска нерелевантны или пустые. Исправить: добавить подсказки/популярные запросы и ссылки на целевые разделы.",
+}
 
 def _send_gpt_request(system_text, user_text):
     """Helper to send request to YandexGPT"""
@@ -68,6 +88,63 @@ def _send_gpt_request(system_text, user_text):
         print(f"YandexAI Exception: {e}")
         return None
 
+def _pack_ai_json(hypothesis: str, fix: str) -> str:
+    """Формирует JSON-строку для хранения ответа AI."""
+    return json.dumps(
+        {
+            "hypothesis": (hypothesis or "").strip(),
+            "fix": (fix or "").strip(),
+        },
+        ensure_ascii=False,
+    )
+
+def _normalize_ai_text_to_json(text: str, issue_type: str) -> str:
+    """
+    Приводит ответ модели к JSON {"hypothesis": "...", "fix": "..."}.
+    Если формат сломан — возвращает заглушку.
+    """
+    if not text:
+        return generate_stub_hypothesis(issue_type)
+
+    text = text.strip()
+    # Прямая попытка распарсить JSON
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict) and 'hypothesis' in parsed and 'fix' in parsed:
+            return _pack_ai_json(str(parsed.get('hypothesis', '')), str(parsed.get('fix', '')))
+    except Exception:
+        pass
+
+    # Попытка вытащить JSON из ответа с кодовыми блоками ``` ... ```
+    if "```" in text:
+        stripped = text.strip().strip("`")
+        # Убираем возможный префикс вида ```json
+        stripped = stripped.replace("json\n", "", 1).replace("json\r\n", "", 1)
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, dict) and 'hypothesis' in parsed and 'fix' in parsed:
+                return _pack_ai_json(str(parsed.get('hypothesis', '')), str(parsed.get('fix', '')))
+        except Exception:
+            pass
+
+    # Парсим старый формат "Гипотеза:/Исправить:"
+    hyp = None
+    fix = None
+    for line in text.splitlines():
+        line_clean = line.strip()
+        low = line_clean.lower()
+        if low.startswith("гипотеза:"):
+            hyp = line_clean.split(":", 1)[1].strip()
+        elif low.startswith("исправить:") or low.startswith("решение:"):
+            fix = line_clean.split(":", 1)[1].strip()
+
+    if hyp or fix:
+        return _pack_ai_json(hyp or "—", fix or "—")
+
+    # Если модель ответила, но формат не распознан — сохраняем как гипотезу как есть,
+    # чтобы не терять содержимое, и подставляем заглушку для фикса.
+    return _pack_ai_json(text[:400], "—")
+
 def analyze_issue_with_ai(issue_type, location, metrics_context, 
                          page_title=None, page_metrics=None, 
                          dominant_cohort=None, dominant_device=None):
@@ -108,12 +185,11 @@ def analyze_issue_with_ai(issue_type, location, metrics_context,
     Метрики: {metrics_context}
     
     Требования к ответу:
-    - Без вступлений и извинений.
-    - Две строки: "Гипотеза:" и "Исправить:".
-    - Гипотеза: конкретная причина с привязкой к данным (не общая формулировка).
-    - Исправить: конкретное изменение UI/контента/логики. Запрещены советы вида "проверить/отладить/исправить", упоминания кнопок "Назад/Вперед" и абстрактные формулировки. Пиши действие, которое сразу внедряется: добавить заметный CTA/редирект, вынести целевую ссылку из фильтра, упростить путь, укоротить форму, заменить мертвый линк.
-    - Избегай дублирования причины в блоке "Исправить".
-    - Длина блока "Исправить" до 140 символов.
+    - Ответ строго в JSON, без Markdown/текста вокруг, одна строка.
+    - Поля: "hypothesis" (конкретная причина с привязкой к данным) и "fix" (конкретное действие, до 140 символов, сразу внедряемое).
+    - Пиши на русском языке, без английских слов и транслита.
+    - Запрещены советы вида "проверить/отладить/исправить", упоминания кнопок "Назад/Вперед" и абстрактные формулировки. Не предлагай хлебные крошки.
+    - Избегай дублирования причины в поле "fix".
     - Учитывай специфику приемной комиссии (абитуриенты, списки, формы).
     """
     
@@ -129,7 +205,7 @@ def analyze_issue_with_ai(issue_type, location, metrics_context,
     """
     
     result = _send_gpt_request(system_text, prompt_content)
-    return result if result else generate_stub_hypothesis(issue_type)
+    return _normalize_ai_text_to_json(result, issue_type)
 
 def generate_cohort_name(metrics_dict):
     """
@@ -150,6 +226,7 @@ def generate_cohort_name(metrics_dict):
     - Главный интерес: {primary_interest}. Главная цель: {primary_goal}
     
     Задача: Дай короткое, емкое название (2-4 слова), описывающее намерение и объект интереса/цель. Используй главный интерес/цель в названии, избегай общих фраз. Примеры: "Ищут рейтинги", "Читатели новостей", "Ищут контакты", "Поступающие абитуриенты", "Заполняют формы". Без абстрактных слов.
+    Обязательно отвечай на русском языке, без латиницы и транслита.
     В ответе только название, без кавычек и лишнего текста.
     """
 
@@ -186,20 +263,30 @@ def generate_cohort_name(metrics_dict):
 
 def generate_stub_hypothesis(issue_type):
     """Резервные тексты, если AI недоступен"""
-    stubs = {
-        'RAGE_CLICK': "Гипотеза: Клик по элементу без отклика или долгая загрузка. Исправить: добавить явный ховер/спиннер и связать действие с корректным обработчиком.",
-        'DEAD_CLICK': "Гипотеза: Клик по нерабочей ссылке/кнопке. Исправить: убрать мёртвый элемент или привязать к реальному действию/редиректу.",
-        'HIGH_BOUNCE': "Гипотеза: Первый экран не совпадает с ожиданием трафика или грузится медленно. Исправить: обновить H1/hero под источник и оптимизировать LCP.",
-        'LOOPING': "Гипотеза: Пользователь не находит целевое действие и ходит по одному пути. Исправить: упростить путь, добавить заметный CTA и прямой линк на целевую страницу.",
-        'FORM_ABANDON': "Гипотеза: Слишком много полей или ранний запрос чувствительных данных. Исправить: сократить форму и разделить на шаги с прогрессом.",
-        'WANDERING': "Гипотеза: Пользователи блуждают по сайту без четкой цели. Исправить: добавить навигационные подсказки и вынести ключевые действия на главную.",
-        'NAVIGATION_BACK': "Гипотеза: Пользователи часто возвращаются назад, не находя нужную информацию. Исправить: улучшить навигацию и добавить хлебные крошки.",
-        'FORM_FIELD_ERRORS': "Гипотеза: Пользователи долго заполняют форму, возможно, исправляют ошибки. Исправить: добавить валидацию в реальном времени и подсказки к полям.",
-        'FUNNEL_DROPOFF': "Гипотеза: Критическая точка отвала в воронке конверсии. Исправить: упростить переход между шагами и добавить прогресс-бар.",
-        'SCAN_AND_DROP': "Гипотеза: Страница не дает ответа, пользователь быстро скроллит и уходит. Исправить: вынести ключевое действие/ответ в верхний экран.",
-        'SEARCH_FAIL': "Гипотеза: Результаты поиска нерелевантны или пустые. Исправить: добавить подсказки/популярные запросы и ссылки на целевые разделы.",
-    }
-    return stubs.get(issue_type, "Рекомендуется детальный анализ поведения пользователя.")
+    template = STUB_TEMPLATES.get(issue_type, "Рекомендуется детальный анализ поведения пользователя.")
+    # Пытаемся вычленить гипотезу/фикс даже из шаблона
+    hyp = None
+    fix = None
+    for line in template.split("."):
+        line_clean = line.strip()
+        low = line_clean.lower()
+        if low.startswith("гипотеза:"):
+            hyp = line_clean.split(":", 1)[1].strip()
+        elif low.startswith("исправить:"):
+            fix = line_clean.split(":", 1)[1].strip()
+    return _pack_ai_json(hyp or template, fix or "—")
+
+def get_stub_text_variants(include_legacy: bool = False):
+    """
+    Возвращает список возможных заглушек (JSON + опционально старые строки),
+    чтобы идентифицировать их в базе при регенерации.
+    """
+    variants = []
+    for issue_type, legacy_text in STUB_TEMPLATES.items():
+        variants.append(generate_stub_hypothesis(issue_type))
+        if include_legacy:
+            variants.append(legacy_text)
+    return list(dict.fromkeys(variants))
 
 
 def analyze_funnel_with_ai(funnel_name, step_metrics, overall_conversion, cohort_name=None):
@@ -254,6 +341,7 @@ def analyze_funnel_with_ai(funnel_name, step_metrics, overall_conversion, cohort
     Формат ответа:
     - Первая строка: "Анализ:" с кратким выводом о проблеме
     - Вторая строка: "Рекомендация:" с конкретным действием для улучшения (до 140 символов)
+    - Пиши на русском языке, без английских слов и транслита.
     
     Учитывай специфику:
     - Абитуриенты часто спешат и испытывают стресс

@@ -2,7 +2,11 @@ import time
 from django.core.management.base import BaseCommand
 from django.db.models import Q
 from analytics.models import UXIssue
-from analytics.ai_service import analyze_issue_with_ai, generate_stub_hypothesis
+from analytics.ai_service import (
+    analyze_issue_with_ai,
+    generate_stub_hypothesis,
+    get_stub_text_variants,
+)
 
 
 class Command(BaseCommand):
@@ -32,8 +36,8 @@ class Command(BaseCommand):
         limit = options["limit"]
         sleep_interval = options["sleep"]
 
-        # Build list of known stub texts to detect placeholders
-        stub_texts = [generate_stub_hypothesis(code) for code, _ in UXIssue.PROBLEM_TYPES]
+        # Build list of known stub texts to detect placeholders (новый JSON и легаси-формат)
+        stub_texts = get_stub_text_variants(include_legacy=True)
 
         qs = UXIssue.objects.all().order_by("-created_at")
         if not force:
@@ -54,8 +58,8 @@ class Command(BaseCommand):
         for idx, issue in enumerate(qs[:limit or None], start=1):
             metrics_context = (
                 f"Пользователи: {issue.affected_sessions}, "
-                f"Impact Score: {issue.impact_score}, "
-                f"Severity: {issue.severity}"
+                f"Влияние: {issue.impact_score}, "
+                f"Критичность: {issue.severity}"
             )
             new_text = analyze_issue_with_ai(issue.issue_type, issue.location_url, metrics_context)
             issue.ai_hypothesis = new_text

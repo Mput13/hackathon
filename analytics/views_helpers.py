@@ -234,7 +234,7 @@ def _build_alerts_dashboard(version):
     for page in risky_pages:
         alerts.append({
             'type': 'HIGH_EXIT',
-            'message': f"High exit/bounce on {get_readable_page_name(page.url)}",
+            'message': f"Высокий выход/отказ на {get_readable_page_name(page.url)}",
             'url': page.url,
             'exit_rate': page.exit_rate,
             'bounce_rate': page.bounce_rate,
@@ -262,7 +262,7 @@ def _build_alerts_compare(issues_diff, pages_diff):
         if row['status'] == 'changed' and row['exit_diff'] > 10:
             alerts.append({
                 'type': 'EXIT_INCREASE',
-                'message': f"Exit rate grew by {row['exit_diff']} p.p. on {row['readable']}",
+                'message': f"Рост выхода на {row['exit_diff']} п.п. для {row['readable']}",
                 'url': row['v2'].url if row['v2'] else (row['v1'].url if row['v1'] else ''),
                 'severity': 'warning' if row['exit_diff'] < 20 else 'critical'
             })

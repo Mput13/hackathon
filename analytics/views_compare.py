@@ -10,6 +10,10 @@ from .views_helpers import (
     _compute_paths,
     _build_alerts_compare,
 )
+from .ai_service import analyze_version_comparison_with_ai
+from django.db.models import Avg, Count, IntegerField
+from django.db.models.functions import Cast
+from .ai_service import analyze_version_comparison_with_ai
 
 
 def compare_versions(request):
@@ -47,6 +51,51 @@ def compare_versions(request):
             comparison['paths_v1'] = _compute_paths(v1.id, limit=10, min_count=5)
             comparison['paths_v2'] = _compute_paths(v2.id, limit=10, min_count=5)
             comparison['alerts'] = _build_alerts_compare(comparison['issues_diff'], comparison['pages_diff'])
+            
+            # Инициализируем ai_analysis как None по умолчанию
+            comparison['ai_analysis'] = None
+            
+            # Генерируем AI-анализ
+            try:
+                stats_v1_for_ai = VisitSession.objects.filter(version=v1).aggregate(
+                    visits=Count('id'),
+                    bounce=Avg(Cast('bounced', output_field=IntegerField())),
+                    duration=Avg('duration_sec'),
+                )
+                stats_v2_for_ai = VisitSession.objects.filter(version=v2).aggregate(
+                    visits=Count('id'),
+                    bounce=Avg(Cast('bounced', output_field=IntegerField())),
+                    duration=Avg('duration_sec'),
+                )
+                
+                ai_result = analyze_version_comparison_with_ai(
+                    v1_name=v1.name,
+                    v2_name=v2.name,
+                    stats_v1=stats_v1_for_ai,
+                    stats_v2=stats_v2_for_ai,
+                    issues_diff=comparison['issues_diff'],
+                    pages_diff=comparison['pages_diff'],
+                    cohorts_diff=comparison.get('cohorts_diff', []),
+                    alerts=comparison['alerts']
+                )
+                # Убеждаемся, что результат не пустой
+                # Функция всегда должна возвращать строку (либо от AI, либо fallback)
+                if ai_result and ai_result.strip():
+                    comparison['ai_analysis'] = ai_result.strip()
+                else:
+                    # Если даже fallback не сработал, используем базовое сообщение
+                    comparison['ai_analysis'] = "Резюме: Недостаточно данных для анализа. Улучшения: требуется больше данных. Проблемы: требуется больше данных. Рекомендация: собрать больше данных для сравнения версий."
+            except Exception as e:
+                # Если AI недоступен - просто не добавляем анализ
+                import traceback
+                print(f"AI analysis error in compare_versions: {e}")
+                print(traceback.format_exc())
+                comparison['ai_analysis'] = None
+            
+            # Убеждаемся, что ai_analysis всегда установлен
+            if 'ai_analysis' not in comparison:
+                comparison['ai_analysis'] = None
+            
             context['comparison'] = comparison
         except ProductVersion.DoesNotExist:
             pass  # Just don't show comparison if IDs are invalid
@@ -154,6 +203,38 @@ def api_compare(request):
             'v2': serialize_cohort(row['v2']) if row['v2'] else None,
         }
 
+    # Генерируем AI-анализ сравнения
+    ai_analysis = None
+    try:
+        # Подготавливаем данные для AI
+        stats_v1_for_ai = {
+            'visits': stats_v1['visits'] or 0,
+            'bounce': stats_v1['bounce'] or 0,
+            'duration': stats_v1['duration'] or 0,
+        }
+        stats_v2_for_ai = {
+            'visits': stats_v2['visits'] or 0,
+            'bounce': stats_v2['bounce'] or 0,
+            'duration': stats_v2['duration'] or 0,
+        }
+        
+        ai_analysis = analyze_version_comparison_with_ai(
+            v1_name=v1.name,
+            v2_name=v2.name,
+            stats_v1=stats_v1_for_ai,
+            stats_v2=stats_v2_for_ai,
+            issues_diff=comparison['issues_diff'],
+            pages_diff=comparison['pages_diff'],
+            cohorts_diff=comparison.get('cohorts_diff', []),
+            alerts=alerts
+        )
+    except Exception as e:
+        # Если AI недоступен или ошибка - просто не добавляем анализ
+        import traceback
+        print(f"AI analysis error: {e}")
+        print(traceback.format_exc())
+        ai_analysis = None
+
     data = {
         'v1': {'id': v1.id, 'name': v1.name},
         'v2': {'id': v2.id, 'name': v2.name},
@@ -179,6 +260,7 @@ def api_compare(request):
         'browser_split': browser_compare,
         'os_split': os_compare,
         'alerts': alerts,
+        'ai_analysis': ai_analysis,  # Добавляем AI-анализ
     }
 
     return JsonResponse({'comparison': data})

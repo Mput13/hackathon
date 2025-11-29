@@ -285,3 +285,222 @@ def analyze_funnel_with_ai(funnel_name, step_metrics, overall_conversion, cohort
             return f"Анализ: Воронка работает стабильно. Рекомендация: проанализировать поведение пользователей, дошедших до конца, для дальнейшей оптимизации."
     
     return result.strip()
+
+
+def analyze_version_comparison_with_ai(
+    v1_name: str,
+    v2_name: str,
+    stats_v1: dict,
+    stats_v2: dict,
+    issues_diff: list,
+    pages_diff: list,
+    cohorts_diff: list = None,
+    alerts: list = None
+) -> str:
+    """
+    Генерирует AI-анализ сравнения двух версий продукта
+    
+    Args:
+        v1_name: Название первой версии
+        v2_name: Название второй версии
+        stats_v1: Статистика первой версии {'visits': ..., 'bounce': ..., 'duration': ...}
+        stats_v2: Статистика второй версии {'visits': ..., 'bounce': ..., 'duration': ...}
+        issues_diff: Список изменений issues [{'status': 'new'|'worse'|'improved'|'resolved', 'issue': UXIssue, ...}, ...]
+        pages_diff: Список изменений страниц [{'status': 'new'|'changed'|'removed', 'v1': PageMetrics, 'v2': PageMetrics, ...}, ...]
+        cohorts_diff: Список изменений когорт (опционально)
+        alerts: Список алертов (опционально)
+    
+    Returns:
+        Строка с AI-анализом сравнения
+    """
+    from analytics.utils import get_readable_page_name
+    
+    # Формируем контекст для AI
+    context_parts = []
+    
+    # Основные метрики
+    v1_visits = stats_v1.get('visits', 0) or 0
+    v2_visits = stats_v2.get('visits', 0) or 0
+    v1_bounce = (stats_v1.get('bounce', 0) or 0) * 100
+    v2_bounce = (stats_v2.get('bounce', 0) or 0) * 100
+    v1_duration = stats_v1.get('duration', 0) or 0
+    v2_duration = stats_v2.get('duration', 0) or 0
+    
+    visits_diff = v2_visits - v1_visits
+    visits_diff_pct = (visits_diff / v1_visits * 100) if v1_visits > 0 else 0
+    bounce_diff = v2_bounce - v1_bounce
+    duration_diff = v2_duration - v1_duration
+    
+    context_parts.append(f"Сравнение версий: {v1_name} → {v2_name}")
+    context_parts.append("")
+    context_parts.append("Основные метрики:")
+    context_parts.append(f"  Посещения: {v1_visits} → {v2_visits} ({visits_diff:+.0f}, {visits_diff_pct:+.1f}%)")
+    context_parts.append(f"  Отказы: {v1_bounce:.1f}% → {v2_bounce:.1f}% ({bounce_diff:+.1f}%)")
+    context_parts.append(f"  Время на сайте: {v1_duration:.1f}с → {v2_duration:.1f}с ({duration_diff:+.1f}с)")
+    
+    # Анализ issues
+    new_issues = [i for i in issues_diff if i.get('status') == 'new']
+    worse_issues = [i for i in issues_diff if i.get('status') == 'worse']
+    improved_issues = [i for i in issues_diff if i.get('status') == 'improved']
+    resolved_issues = [i for i in issues_diff if i.get('status') == 'resolved']
+    
+    if new_issues or worse_issues or improved_issues or resolved_issues:
+        context_parts.append("")
+        context_parts.append("Изменения в UX-проблемах:")
+        if new_issues:
+            context_parts.append(f"  Новых проблем: {len(new_issues)}")
+            # Топ-3 новых проблем
+            top_new = sorted(new_issues, key=lambda x: getattr(x.get('issue'), 'impact_score', 0) if hasattr(x.get('issue'), 'impact_score') else 0, reverse=True)[:3]
+            for item in top_new:
+                issue = item.get('issue')
+                if issue and hasattr(issue, 'impact_score'):
+                    location = get_readable_page_name(issue.location_url) if hasattr(issue, 'location_url') else 'неизвестно'
+                    context_parts.append(f"    - {issue.issue_type} на {location} (impact: {issue.impact_score})")
+        if worse_issues:
+            context_parts.append(f"  Ухудшилось: {len(worse_issues)}")
+        if improved_issues:
+            context_parts.append(f"  Улучшилось: {len(improved_issues)}")
+        if resolved_issues:
+            context_parts.append(f"  Решено: {len(resolved_issues)}")
+    
+    # Анализ страниц
+    changed_pages = [p for p in pages_diff if p.get('status') in ['new', 'changed']]
+    if changed_pages:
+        context_parts.append("")
+        context_parts.append("Изменения в страницах:")
+        # Топ-3 измененных страниц
+        top_changed = sorted(changed_pages, key=lambda x: abs(x.get('exit_diff', 0)) + abs(x.get('time_diff', 0)), reverse=True)[:3]
+        for page in top_changed:
+            readable = page.get('readable', 'Неизвестная страница')
+            exit_diff = page.get('exit_diff', 0)
+            time_diff = page.get('time_diff', 0)
+            context_parts.append(f"    - {readable}: exit_rate {exit_diff:+.1f}%, время {time_diff:+.1f}с")
+    
+    # Анализ когорт
+    if cohorts_diff:
+        new_cohorts = [c for c in cohorts_diff if c.get('status') == 'new']
+        changed_cohorts = [c for c in cohorts_diff if c.get('status') == 'changed']
+        if new_cohorts or changed_cohorts:
+            context_parts.append("")
+            context_parts.append("Изменения в когортах:")
+            if new_cohorts:
+                context_parts.append(f"  Новых когорт: {len(new_cohorts)}")
+            if changed_cohorts:
+                context_parts.append(f"  Изменившихся когорт: {len(changed_cohorts)}")
+    
+    # Алерты
+    if alerts:
+        critical_alerts = [a for a in alerts if a.get('severity') == 'critical']
+        if critical_alerts:
+            context_parts.append("")
+            context_parts.append("Критические алерты:")
+            for alert in critical_alerts[:3]:
+                context_parts.append(f"    - {alert.get('message', '')}")
+    
+    full_context = "\n".join(context_parts)
+    
+    prompt_content = f"""
+    Ты анализируешь сравнение двух версий портала Приемной Комиссии университета.
+    
+    {full_context}
+    
+    Твоя задача: дать краткий executive summary сравнения версий.
+    
+    Формат ответа (строго):
+    - Первая строка: "Резюме:" с кратким выводом (1-2 предложения) - что изменилось в целом
+    - Вторая строка: "Улучшения:" с перечислением позитивных изменений (если есть)
+    - Третья строка: "Проблемы:" с перечислением негативных изменений или новых проблем (если есть)
+    - Четвертая строка: "Рекомендация:" с одной конкретной рекомендацией по приоритетному действию (до 120 символов)
+    
+    Правила:
+    - Без вступлений и общих фраз
+    - Фокусируйся на значимых изменениях (отказы ±5%, время ±10%, новые критические проблемы)
+    - Если изменений мало - скажи что версия стабильна
+    - Рекомендация должна быть конкретной и actionable
+    - Учитывай специфику приемной комиссии (абитуриенты, формы, списки)
+    """
+    
+    system_text = """
+    Ты главный продукт-аналитик портала Приемной Комиссии университета.
+    Твоя задача - анализировать изменения между версиями продукта и давать 
+    краткие, но информативные executive summary для менеджмента.
+    Отвечай структурированно, выделяй самое важное, давай конкретные рекомендации.
+    """
+    
+    result = _send_gpt_request(system_text, prompt_content)
+    
+    if not result or not result.strip():
+        # Fallback анализ (используем уже вычисленные переменные)
+        summary_parts = []
+        
+        # Определяем общий тренд
+        if bounce_diff < -2 and duration_diff > 5:
+            summary = f"Версия {v2_name} показывает улучшение - снижение отказов на {abs(bounce_diff):.1f}% и увеличение времени на сайте."
+        elif bounce_diff > 2 and duration_diff < -5:
+            summary = f"Версия {v2_name} показывает ухудшение - рост отказов на {bounce_diff:.1f}% и снижение времени на сайте."
+        elif len(new_issues) > 5 or len(worse_issues) > 3:
+            summary = f"Версия {v2_name} имеет больше UX-проблем - {len(new_issues)} новых и {len(worse_issues)} ухудшившихся."
+        elif len(improved_issues) > 3 or len(resolved_issues) > 5:
+            summary = f"Версия {v2_name} показывает улучшение - {len(improved_issues)} проблем улучшилось, {len(resolved_issues)} решено."
+        else:
+            summary = f"Версия {v2_name} показывает стабильные метрики с минимальными изменениями."
+        
+        summary_parts.append(f"Резюме: {summary}")
+        
+        improvements = []
+        if bounce_diff < -2:
+            improvements.append(f"снижение отказов на {abs(bounce_diff):.1f}%")
+        if duration_diff > 5:
+            improvements.append(f"увеличение времени на сайте на {duration_diff:.1f}с")
+        if len(improved_issues) > 0:
+            improvements.append(f"{len(improved_issues)} проблем улучшилось")
+        if len(resolved_issues) > 0:
+            improvements.append(f"{len(resolved_issues)} проблем решено")
+        
+        problems = []
+        if bounce_diff > 2:
+            problems.append(f"рост отказов на {bounce_diff:.1f}%")
+        if duration_diff < -5:
+            problems.append(f"снижение времени на сайте на {abs(duration_diff):.1f}с")
+        if len(new_issues) > 0:
+            problems.append(f"{len(new_issues)} новых проблем")
+        if len(worse_issues) > 0:
+            problems.append(f"{len(worse_issues)} проблем ухудшилось")
+        
+        summary_parts.append(f"Улучшения: {', '.join(improvements) if improvements else 'минимальные'}")
+        summary_parts.append(f"Проблемы: {', '.join(problems) if problems else 'критических не выявлено'}")
+        
+        # Рекомендация
+        if len(new_issues) > 5 or len(worse_issues) > 3:
+            recommendation = "Приоритет: исправить критические UX-проблемы, особенно на страницах с высоким трафиком."
+        elif bounce_diff > 3:
+            recommendation = "Приоритет: оптимизировать страницы входа и улучшить соответствие контента ожиданиям пользователей."
+        elif len(improved_issues) > 0:
+            recommendation = "Продолжить работу по улучшению UX, фокусируясь на проблемах с высоким impact_score."
+        else:
+            recommendation = "Версия стабильна, рекомендуется мониторинг метрик и профилактика новых проблем."
+        
+        summary_parts.append(f"Рекомендация: {recommendation}")
+        
+        fallback_result = "\n".join(summary_parts)
+        # Убеждаемся, что fallback всегда возвращает непустую строку
+        return fallback_result if fallback_result.strip() else f"Резюме: Версия {v2_name} показывает стабильные метрики. Улучшения: минимальные. Проблемы: критических не выявлено. Рекомендация: продолжить мониторинг."
+    
+    # Убеждаемся, что результат не пустой
+    if result and result.strip():
+        return result.strip()
+    else:
+        # Если AI вернул пустой результат, используем fallback
+        # (переменные bounce_diff, duration_diff и т.д. уже вычислены выше)
+        summary_parts = []
+        if bounce_diff < -2 and duration_diff > 5:
+            summary = f"Версия {v2_name} показывает улучшение - снижение отказов на {abs(bounce_diff):.1f}% и увеличение времени на сайте."
+        elif bounce_diff > 2 and duration_diff < -5:
+            summary = f"Версия {v2_name} показывает ухудшение - рост отказов на {bounce_diff:.1f}% и снижение времени на сайте."
+        else:
+            summary = f"Версия {v2_name} показывает стабильные метрики с минимальными изменениями."
+        summary_parts.append(f"Резюме: {summary}")
+        summary_parts.append(f"Улучшения: {'снижение отказов' if bounce_diff < -2 else 'минимальные'}")
+        summary_parts.append(f"Проблемы: {'критических не выявлено' if bounce_diff <= 2 else 'требуется внимание'}")
+        summary_parts.append(f"Рекомендация: продолжить мониторинг метрик.")
+        return "\n".join(summary_parts)

@@ -6,7 +6,10 @@ urlpatterns = [
     path('compare/', views.compare_versions, name='compare'),
     path('issues/', views.issues_list, name='issues_list'),
     path('funnels/', views.funnels_list, name='funnels_list'),
+    path('funnels/create/', views.funnel_create, name='funnel_create'),
     path('funnels/<int:funnel_id>/', views.funnel_detail, name='funnel_detail'),
+    path('funnels/<int:funnel_id>/edit/', views.funnel_edit, name='funnel_edit'),
+    path('funnels/<int:funnel_id>/delete/', views.funnel_delete, name='funnel_delete'),
     # JSON API endpoints for frontend
     path('api/versions/', views.api_versions, name='api_versions'),
     path('api/dashboard/', views.api_dashboard, name='api_dashboard'),

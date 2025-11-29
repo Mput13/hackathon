@@ -20,15 +20,35 @@
 </div>
 
 {% if selected_version %}
-<div class="mb-4 flex justify-between items-center">
-    <h2 class="text-2xl font-bold text-gray-800">Воронки для {{ selected_version.name }}</h2>
-    <div class="text-sm text-gray-500">
-        {% if funnels %}
-        Всего воронок: {{ funnels|length }}
-        {% else %}
-        Воронки не найдены
-        {% endif %}
+<div class="mb-6">
+    <div class="flex justify-between items-center mb-4">
+        <h2 class="text-2xl font-bold text-gray-800">Воронки для {{ selected_version.name }}</h2>
+        <div class="flex items-center gap-4">
+            <a href="{% url 'funnel_create' %}?version={{ selected_version.id }}" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+                + Создать воронку
+            </a>
+            <div class="text-sm text-gray-500">
+                {% if funnels %}
+                Всего воронок: {{ funnels|length }}
+                {% else %}
+                Воронки не найдены
+                {% endif %}
+            </div>
+        </div>
     </div>
+    
+    {% if funnels %}
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+        <p class="text-sm text-blue-900 mb-2">
+            <strong>ℹ️ Почему именно эти воронки?</strong>
+        </p>
+        <p class="text-sm text-blue-800">
+            Воронки созданы на основе анализа реальных данных: выбраны самые популярные пути пользователей (по количеству hits), 
+            которые отражают типичные сценарии использования сайта. Это позволяет анализировать реальное поведение пользователей, 
+            а не гипотетические воронки.
+        </p>
+    </div>
+    {% endif %}
 </div>
 
 {% if funnels %}
@@ -50,6 +70,16 @@
                     {% endif %}
                 </div>
             </div>
+            {% if not funnel.is_preset %}
+            <div class="flex gap-2 ml-4">
+                <a href="{% url 'funnel_edit' funnel.id %}" class="text-indigo-600 hover:text-indigo-800 text-sm" title="Редактировать">
+                    ✏️
+                </a>
+                <a href="{% url 'funnel_delete' funnel.id %}" class="text-red-600 hover:text-red-800 text-sm" title="Удалить">
+                    🗑️
+                </a>
+            </div>
+            {% endif %}
         </div>
 
         {% if funnel.has_metrics %}
@@ -73,9 +103,12 @@
         </div>
         {% else %}
         <div class="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-            <p class="text-sm text-yellow-800">
-                ⚠️ Метрики еще не рассчитаны. Запустите команду <code class="bg-yellow-100 px-1 rounded">calculate_funnels</code>
+            <p class="text-sm text-yellow-800 mb-2">
+                ⚠️ Метрики еще не рассчитаны. Запустите команду:
             </p>
+            <code class="block bg-yellow-100 px-2 py-1 rounded text-xs">
+                docker-compose exec web python manage.py calculate_funnels --product-version "{{ selected_version.name }}" --by-cohorts
+            </code>
         </div>
         {% endif %}
 
@@ -94,11 +127,19 @@
     </svg>
     <h3 class="text-xl font-bold text-gray-800 mb-2">Воронки не найдены</h3>
     <p class="text-gray-600 mb-6">Для этой версии еще не созданы воронки конверсии.</p>
-    <div class="bg-gray-50 p-4 rounded-lg text-left max-w-2xl mx-auto">
-        <p class="text-sm font-semibold text-gray-800 mb-2">Создайте воронки через команду:</p>
-        <code class="block bg-gray-800 text-green-400 p-3 rounded text-sm">
-            docker-compose exec web python manage.py create_funnels --version "{{ selected_version.name }}"
-        </code>
+    <div class="bg-gray-50 p-4 rounded-lg text-left max-w-2xl mx-auto space-y-4">
+        <div>
+            <p class="text-sm font-semibold text-gray-800 mb-2">Создайте воронки через команду:</p>
+            <code class="block bg-gray-800 text-green-400 p-3 rounded text-sm">
+                docker-compose exec web python manage.py create_funnels --product-version "{{ selected_version.name }}" --clear
+            </code>
+        </div>
+        <div>
+            <p class="text-sm font-semibold text-gray-800 mb-2">Затем рассчитайте метрики:</p>
+            <code class="block bg-gray-800 text-green-400 p-3 rounded text-sm">
+                docker-compose exec web python manage.py calculate_funnels --product-version "{{ selected_version.name }}" --by-cohorts --force-recalculate
+            </code>
+        </div>
     </div>
 </div>
 {% endif %}

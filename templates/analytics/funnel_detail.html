@@ -26,9 +26,21 @@
                 <span>{{ funnel.steps|length }} шагов</span>
                 {% if funnel.is_preset %}
                 <span class="px-2 py-1 bg-indigo-100 text-indigo-700 rounded text-xs">Предустановленная</span>
+                {% else %}
+                <span class="px-2 py-1 bg-green-100 text-green-700 rounded text-xs">Кастомная</span>
                 {% endif %}
             </div>
         </div>
+        {% if not funnel.is_preset %}
+        <div class="flex gap-2">
+            <a href="{% url 'funnel_edit' funnel.id %}" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+                ✏️ Редактировать
+            </a>
+            <a href="{% url 'funnel_delete' funnel.id %}" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+                🗑️ Удалить
+            </a>
+        </div>
+        {% endif %}
     </div>
 
     <!-- Шаги воронки -->
@@ -214,7 +226,7 @@
     <p class="text-gray-600 mb-6">Запустите команду для расчета метрик этой воронки.</p>
     <div class="bg-gray-50 p-4 rounded-lg text-left max-w-2xl mx-auto">
         <code class="block bg-gray-800 text-green-400 p-3 rounded text-sm">
-            docker-compose exec web python manage.py calculate_funnels --version "{{ funnel.version.name }}" --funnel-id {{ funnel.id }}
+            docker-compose exec web python manage.py calculate_funnels --product-version "{{ funnel.version.name }}" --funnel-id {{ funnel.id }}
         </code>
     </div>
 </div>

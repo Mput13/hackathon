@@ -1,10 +1,13 @@
-from django.shortcuts import render
+from django.shortcuts import render, redirect, get_object_or_404
 from django.db.models import Sum, Avg, Count, Case, When, IntegerField
 from django.db.models.functions import Cast
 from django.http import JsonResponse
+from django.contrib import messages
 from .models import ProductVersion, VisitSession, UXIssue, DailyStat, UserCohort, PageMetrics, ConversionFunnel, FunnelMetrics
+from .forms import CreateFunnelForm
 from .utils import get_readable_page_name
 import urllib.parse
+import json
 
 
 def _normalize_issue_url(raw_url: str) -> str:
@@ -551,11 +554,10 @@ def funnels_list(request):
     
     funnels = []
     if selected_version:
-        # Показываем только preset-воронки (созданные вручную)
+        # Показываем все воронки (preset и кастомные)
         funnels = ConversionFunnel.objects.filter(
-            version=selected_version,
-            is_preset=True
-        ).order_by('name')
+            version=selected_version
+        ).order_by('-is_preset', 'name')  # Сначала preset, потом кастомные
         
         # Добавляем информацию о метриках
         for funnel in funnels:
@@ -578,6 +580,140 @@ def funnels_list(request):
         'funnels': funnels
     }
     return render(request, 'analytics/funnels.html', context)
+
+
+def funnel_create(request):
+    """Создание новой кастомной воронки"""
+    if request.method == 'POST':
+        form = CreateFunnelForm(request.POST)
+        
+        # Получаем шаги из JSON
+        steps_json = request.POST.get('steps_json', '[]')
+        try:
+            steps = json.loads(steps_json)
+        except json.JSONDecodeError:
+            steps = []
+        
+        if form.is_valid() and steps:
+            funnel = form.save(commit=False)
+            funnel.is_preset = False  # Кастомная воронка
+            funnel.steps = steps
+            funnel.save()
+            
+            messages.success(request, f'Воронка "{funnel.name}" успешно создана!')
+            return redirect('funnel_detail', funnel_id=funnel.id)
+        else:
+            if not steps:
+                form.add_error(None, 'Добавьте хотя бы один шаг воронки')
+    else:
+        form = CreateFunnelForm()
+        # Если передан version_id, устанавливаем его по умолчанию
+        version_id = request.GET.get('version')
+        if version_id:
+            try:
+                form.fields['version'].initial = ProductVersion.objects.get(id=version_id)
+            except ProductVersion.DoesNotExist:
+                pass
+    
+    # Загружаем список целей для подсказок
+    from .utils import GoalParser
+    import json as json_module
+    goal_parser = GoalParser()
+    goals = goal_parser.get_goals()
+    
+    context = {
+        'form': form,
+        'goals_json': json_module.dumps([{'code': g.get('code', ''), 'name': g.get('name', '')} for g in goals]),
+        'versions': ProductVersion.objects.all().order_by('name')
+    }
+    return render(request, 'analytics/funnel_create.html', context)
+
+
+def funnel_edit(request, funnel_id):
+    """Редактирование воронки"""
+    try:
+        funnel = ConversionFunnel.objects.get(id=funnel_id)
+    except ConversionFunnel.DoesNotExist:
+        from django.http import Http404
+        raise Http404("Воронка не найдена")
+    
+    # Preset-воронки нельзя редактировать
+    if funnel.is_preset:
+        messages.error(request, 'Предустановленные воронки нельзя редактировать')
+        return redirect('funnel_detail', funnel_id=funnel.id)
+    
+    if request.method == 'POST':
+        form = CreateFunnelForm(request.POST, instance=funnel)
+        
+        # Получаем шаги из JSON
+        steps_json = request.POST.get('steps_json', '[]')
+        try:
+            steps = json.loads(steps_json)
+        except json.JSONDecodeError:
+            steps = []
+        
+        if form.is_valid() and steps:
+            funnel = form.save(commit=False)
+            funnel.steps = steps
+            funnel.save()
+            
+            # Удаляем старые метрики, так как воронка изменилась
+            FunnelMetrics.objects.filter(funnel=funnel).delete()
+            
+            messages.success(request, f'Воронка "{funnel.name}" успешно обновлена!')
+            return redirect('funnel_detail', funnel_id=funnel.id)
+        else:
+            if not steps:
+                form.add_error(None, 'Добавьте хотя бы один шаг воронки')
+    else:
+        form = CreateFunnelForm(instance=funnel)
+    
+    # Загружаем список целей для подсказок
+    from .utils import GoalParser
+    import json as json_module
+    goal_parser = GoalParser()
+    goals = goal_parser.get_goals()
+    
+    context = {
+        'form': form,
+        'funnel': funnel,
+        'goals_json': json_module.dumps([{'code': g.get('code', ''), 'name': g.get('name', '')} for g in goals]),
+        'versions': ProductVersion.objects.all().order_by('name'),
+        'existing_steps': json_module.dumps(funnel.steps)
+    }
+    return render(request, 'analytics/funnel_edit.html', context)
+
+
+def funnel_delete(request, funnel_id):
+    """Удаление воронки"""
+    try:
+        funnel = ConversionFunnel.objects.get(id=funnel_id)
+    except ConversionFunnel.DoesNotExist:
+        from django.http import Http404
+        raise Http404("Воронка не найдена")
+    
+    # Preset-воронки нельзя удалять
+    if funnel.is_preset:
+        messages.error(request, 'Предустановленные воронки нельзя удалять')
+        return redirect('funnel_detail', funnel_id=funnel.id)
+    
+    if request.method == 'POST':
+        funnel_name = funnel.name
+        version_id = funnel.version.id
+        
+        # Удаляем связанные метрики
+        FunnelMetrics.objects.filter(funnel=funnel).delete()
+        
+        # Удаляем воронку
+        funnel.delete()
+        
+        messages.success(request, f'Воронка "{funnel_name}" успешно удалена!')
+        return redirect('funnels_list', version=version_id)
+    
+    context = {
+        'funnel': funnel
+    }
+    return render(request, 'analytics/funnel_delete.html', context)
 
 
 def funnel_detail(request, funnel_id):

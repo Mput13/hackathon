@@ -1,8 +1,9 @@
 from django.shortcuts import render
+from django.db import models
 from django.db.models import Sum, Avg, Count, Case, When, IntegerField
 from django.db.models.functions import Cast
 from django.http import JsonResponse
-from .models import ProductVersion, VisitSession, UXIssue, DailyStat, UserCohort, PageMetrics, ConversionFunnel, FunnelMetrics
+from .models import ProductVersion, VisitSession, UXIssue, DailyStat, UserCohort, PageMetrics, PageHit, ConversionFunnel, FunnelMetrics
 from .utils import get_readable_page_name
 import urllib.parse
 
@@ -25,6 +26,249 @@ def _normalize_issue_url(raw_url: str) -> str:
     if netloc or scheme:
         return urllib.parse.urlunparse((scheme, netloc, path, '', clean_query, ''))
     return path + (f"?{clean_query}" if clean_query else "")
+
+
+def _device_label(raw):
+    """Нормализует значение device_category в человекочитаемый вид."""
+    mapping = {
+        '1': 'desktop', 1: 'desktop',
+        '2': 'mobile', 2: 'mobile',
+        '3': 'tablet', 3: 'tablet',
+        '4': 'tv', 4: 'tv',
+        'desktop': 'desktop',
+        'mobile': 'mobile',
+        'tablet': 'tablet',
+        'tv': 'tv'
+    }
+    return mapping.get(raw, raw or 'unknown')
+
+
+def _compute_paths(version_id, limit=20, min_count=5):
+    """
+    Возвращает топ путей (2-3 шага) для версии: path, steps, count, unique_users.
+    """
+    hits = PageHit.objects.filter(session__version_id=version_id).order_by(
+        'session_id', 'timestamp'
+    ).values(
+        'session_id', 'url'
+    )
+    path_counts = {}
+    path_sessions = {}
+    current_session = None
+    buffer = []
+
+    def push_path(seq, session_key):
+        if not seq or len(set(seq)) == 1:
+            return
+        path = tuple(seq)
+        path_counts[path] = path_counts.get(path, 0) + 1
+        if path not in path_sessions:
+            path_sessions[path] = set()
+        path_sessions[path].add(session_key)
+
+    for row in hits:
+        sid = row.get('session_id')
+        if sid is None:
+            continue
+        if sid != current_session:
+            buffer = []
+            current_session = sid
+        url_norm = _normalize_issue_url(row['url'])
+        if not url_norm:
+            continue
+        # Пропускаем подряд дубли, чтобы не собирать шум вида A->A->B
+        if buffer and buffer[-1] == url_norm:
+            continue
+        buffer.append(url_norm)
+        if len(buffer) > 4:
+            buffer = buffer[-4:]
+        if len(buffer) >= 2:
+            push_path(buffer[-2:], sid)
+        if len(buffer) >= 3:
+            push_path(buffer[-3:], sid)
+
+    results = []
+    for path, cnt in path_counts.items():
+        if cnt < min_count:
+            continue
+        users = len(path_sessions.get(path, []))
+        results.append({
+            'path': " -> ".join(path),
+            'steps': list(path),
+            'count': cnt,
+            'unique_users': users,
+        })
+
+    results = sorted(results, key=lambda x: x['count'], reverse=True)
+    if limit > 0:
+        results = results[:limit]
+    return results
+
+
+def _device_split_compare(v1, v2, stats_v1, stats_v2):
+    """Возвращает сравнение по устройствам для двух версий."""
+    dev_v1 = VisitSession.objects.filter(version=v1).values('device_category').annotate(
+        visits=Count('id'),
+        bounce=Avg(Cast('bounced', output_field=IntegerField())),
+        duration=Avg('duration_sec')
+    )
+    dev_v2 = VisitSession.objects.filter(version=v2).values('device_category').annotate(
+        visits=Count('id'),
+        bounce=Avg(Cast('bounced', output_field=IntegerField())),
+        duration=Avg('duration_sec')
+    )
+    total1 = stats_v1['visits'] or 0
+    total2 = stats_v2['visits'] or 0
+    dev_map = {}
+    for row in dev_v1:
+        key = _device_label(row['device_category'])
+        dev_map[key] = {
+            'device': key,
+            'visits_v1': row['visits'],
+            'share_v1': (row['visits'] / total1 * 100) if total1 else 0,
+            'bounce_v1': (row['bounce'] or 0) * 100,
+            'duration_v1': row['duration'] or 0
+        }
+    for row in dev_v2:
+        key = _device_label(row['device_category'])
+        if key not in dev_map:
+            dev_map[key] = {'device': key, 'visits_v1': 0, 'share_v1': 0, 'bounce_v1': 0, 'duration_v1': 0}
+        dev_map[key].update({
+            'visits_v2': row['visits'],
+            'share_v2': (row['visits'] / total2 * 100) if total2 else 0,
+            'bounce_v2': (row['bounce'] or 0) * 100,
+            'duration_v2': row['duration'] or 0
+        })
+    device_compare = []
+    for val in dev_map.values():
+        device_compare.append({
+            'device': val['device'],
+            'visits_v1': val.get('visits_v1', 0),
+            'visits_v2': val.get('visits_v2', 0),
+            'share_v1': round(val.get('share_v1', 0), 2),
+            'share_v2': round(val.get('share_v2', 0), 2),
+            'share_diff': round(val.get('share_v2', 0) - val.get('share_v1', 0), 2),
+            'bounce_v1': round(val.get('bounce_v1', 0), 1),
+            'bounce_v2': round(val.get('bounce_v2', 0), 1),
+            'bounce_diff': round(val.get('bounce_v2', 0) - val.get('bounce_v1', 0), 1),
+            'duration_v1': round(val.get('duration_v1', 0), 1),
+            'duration_v2': round(val.get('duration_v2', 0), 1),
+            'duration_diff': round(val.get('duration_v2', 0) - val.get('duration_v1', 0), 1),
+        })
+    return device_compare
+
+
+def _agent_split_compare(v1, v2, stats_v1, stats_v2, field):
+    """Сравнение по браузерам/OS (field='browser' или 'os') с дельтами (топ-5 по трафику)."""
+    qs1 = VisitSession.objects.filter(version=v1).values(field).annotate(
+        visits=Count('id'),
+        bounce=Avg(Cast('bounced', output_field=IntegerField())),
+        duration=Avg('duration_sec')
+    ).order_by('-visits')[:5]
+    qs2 = VisitSession.objects.filter(version=v2).values(field).annotate(
+        visits=Count('id'),
+        bounce=Avg(Cast('bounced', output_field=IntegerField())),
+        duration=Avg('duration_sec')
+    ).order_by('-visits')[:5]
+    total1 = stats_v1['visits'] or 0
+    total2 = stats_v2['visits'] or 0
+    mp = {}
+    for row in qs1:
+        key = row[field] or 'unknown'
+        mp[key] = {
+            field: key,
+            'visits_v1': row['visits'],
+            'share_v1': (row['visits'] / total1 * 100) if total1 else 0,
+            'bounce_v1': (row['bounce'] or 0) * 100,
+            'duration_v1': row['duration'] or 0
+        }
+    for row in qs2:
+        key = row[field] or 'unknown'
+        if key not in mp:
+            mp[key] = {field: key, 'visits_v1': 0, 'share_v1': 0, 'bounce_v1': 0, 'duration_v1': 0}
+        mp[key].update({
+            'visits_v2': row['visits'],
+            'share_v2': (row['visits'] / total2 * 100) if total2 else 0,
+            'bounce_v2': (row['bounce'] or 0) * 100,
+            'duration_v2': row['duration'] or 0
+        })
+    res = []
+    for val in mp.values():
+        res.append({
+            field: val[field],
+            'visits_v1': val.get('visits_v1', 0),
+            'visits_v2': val.get('visits_v2', 0),
+            'share_v1': round(val.get('share_v1', 0), 2),
+            'share_v2': round(val.get('share_v2', 0), 2),
+            'share_diff': round(val.get('share_v2', 0) - val.get('share_v1', 0), 2),
+            'bounce_v1': round(val.get('bounce_v1', 0), 1),
+            'bounce_v2': round(val.get('bounce_v2', 0), 1),
+            'bounce_diff': round(val.get('bounce_v2', 0) - val.get('bounce_v1', 0), 1),
+            'duration_v1': round(val.get('duration_v1', 0), 1),
+            'duration_v2': round(val.get('duration_v2', 0), 1),
+            'duration_diff': round(val.get('duration_v2', 0) - val.get('duration_v1', 0), 1),
+        })
+    return res
+
+
+def _build_alerts_dashboard(version):
+    """
+    Простейшие алерты: новые CRITICAL issues и страницы с высоким exit/bounce.
+    """
+    alerts = []
+    # Новые/свежие CRITICAL issues
+    critical_issues = UXIssue.objects.filter(version=version, severity='CRITICAL').order_by('-created_at')[:10]
+    for issue in critical_issues:
+        alerts.append({
+            'type': 'CRITICAL_ISSUE',
+            'message': issue.description,
+            'location': get_readable_page_name(issue.location_url),
+            'url': issue.location_url,
+            'issue_id': issue.id,
+            'severity': 'critical',
+        })
+
+    # Страницы с высоким exit/bounce
+    risky_pages = PageMetrics.objects.filter(
+        version=version,
+        total_views__gte=100
+    ).filter(models.Q(exit_rate__gt=70) | models.Q(bounce_rate__gt=70)).order_by('-exit_rate')[:10]
+    for page in risky_pages:
+        alerts.append({
+            'type': 'HIGH_EXIT',
+            'message': f"High exit/bounce on {get_readable_page_name(page.url)}",
+            'url': page.url,
+            'exit_rate': page.exit_rate,
+            'bounce_rate': page.bounce_rate,
+            'severity': 'warning' if page.exit_rate < 80 else 'critical'
+        })
+    return alerts
+
+
+def _build_alerts_compare(issues_diff, pages_diff):
+    """
+    Алерты для сравнения: новые критические и рост exit.
+    """
+    alerts = []
+    for row in issues_diff:
+        issue = row['issue']
+        if row['status'] == 'new' and issue.severity == 'CRITICAL':
+            alerts.append({
+                'type': 'NEW_CRITICAL',
+                'message': issue.description,
+                'url': issue.location_url,
+                'issue_id': issue.id,
+                'severity': 'critical'
+            })
+    for row in pages_diff:
+        if row['status'] == 'changed' and row['exit_diff'] > 10:
+            alerts.append({
+                'type': 'EXIT_INCREASE',
+                'message': f"Exit rate grew by {row['exit_diff']} p.p. on {row['readable']}",
+                'url': row['v2'].url if row['v2'] else (row['v1'].url if row['v1'] else ''),
+                'severity': 'warning' if row['exit_diff'] < 20 else 'critical'
+            })
+    return alerts
 
 
 def _build_comparison(v1, v2):
@@ -195,14 +439,55 @@ def dashboard(request):
         
         issue_count = UXIssue.objects.filter(version=version).count()
         critical_issues = UXIssue.objects.filter(version=version, severity='CRITICAL').count()
-        
+
+        # Device split
+        by_device = VisitSession.objects.filter(version=version).values('device_category').annotate(
+            visits=Count('id'),
+            bounce=Avg(Cast('bounced', output_field=IntegerField())),
+            duration=Avg('duration_sec')
+        )
+        total_visits = stats['total_visits'] or 0
+        devices = []
+        for row in by_device:
+            share = (row['visits'] / total_visits * 100) if total_visits else 0
+            dev_label = _device_label(row['device_category'])
+            devices.append({
+                'device': dev_label,
+                'visits': row['visits'],
+                'share': round(share, 2),
+                'bounce_rate': round((row['bounce'] or 0) * 100, 1),
+                'avg_duration': round(row['duration'] or 0, 1)
+            })
+
+        # Browser split (top-5)
+        by_browser = VisitSession.objects.filter(version=version).values('browser').annotate(
+            visits=Count('id'),
+            bounce=Avg(Cast('bounced', output_field=IntegerField())),
+            duration=Avg('duration_sec')
+        ).order_by('-visits')[:5]
+        browsers = []
+        for row in by_browser:
+            share = (row['visits'] / total_visits * 100) if total_visits else 0
+            browsers.append({
+                'browser': row['browser'] or 'unknown',
+                'visits': row['visits'],
+                'share': round(share, 2),
+                'bounce_rate': round((row['bounce'] or 0) * 100, 1),
+                'avg_duration': round(row['duration'] or 0, 1)
+            })
+
+        alerts = _build_alerts_dashboard(version)
+
         version_stats.append({
             'version': version,
             'total_visits': stats['total_visits'] or 0,
             'avg_duration': round(stats['avg_duration'] or 0, 1),
             'bounce_rate': round((stats['bounce_rate'] or 0) * 100, 1),
             'issue_count': issue_count,
-            'critical_issues': critical_issues
+            'critical_issues': critical_issues,
+            'device_split': devices,
+            'browser_split': browsers,
+            'alerts': alerts
         })
     
     # Get recent issues for the dashboard list
@@ -249,6 +534,14 @@ def compare_versions(request):
             v1 = ProductVersion.objects.get(id=v1_id)
             v2 = ProductVersion.objects.get(id=v2_id)
             comparison = _build_comparison(v1, v2)
+            stats_v1 = {'visits': comparison['stats_v1']['visits']}
+            stats_v2 = {'visits': comparison['stats_v2']['visits']}
+            comparison['device_split'] = _device_split_compare(v1, v2, stats_v1, stats_v2)
+            comparison['browser_split'] = _agent_split_compare(v1, v2, stats_v1, stats_v2, 'browser')
+            comparison['os_split'] = _agent_split_compare(v1, v2, stats_v1, stats_v2, 'os')
+            comparison['paths_v1'] = _compute_paths(v1.id, limit=10, min_count=5)
+            comparison['paths_v2'] = _compute_paths(v2.id, limit=10, min_count=5)
+            comparison['alerts'] = _build_alerts_compare(comparison['issues_diff'], comparison['pages_diff'])
             context['comparison'] = comparison
         except ProductVersion.DoesNotExist:
             pass # Just don't show comparison if IDs are invalid
@@ -316,6 +609,42 @@ def api_dashboard(request):
         issue_count = UXIssue.objects.filter(version=version).count()
         critical_issues = UXIssue.objects.filter(version=version, severity='CRITICAL').count()
 
+        # Разрез по устройствам
+        by_device = VisitSession.objects.filter(version=version).values('device_category').annotate(
+            visits=Count('id'),
+            bounce=Avg(Cast('bounced', output_field=IntegerField())),
+            duration=Avg('duration_sec')
+        )
+        total_visits = stats['total_visits'] or 0
+        devices = []
+        for row in by_device:
+            share = (row['visits'] / total_visits * 100) if total_visits else 0
+            dev_label = _device_label(row['device_category'])
+            devices.append({
+                'device': dev_label,
+                'visits': row['visits'],
+                'share': round(share, 2),
+                'bounce_rate': round((row['bounce'] or 0) * 100, 1),
+                'avg_duration': round(row['duration'] or 0, 1)
+            })
+
+        # Разрез по браузерам (топ-5)
+        by_browser = VisitSession.objects.filter(version=version).values('browser').annotate(
+            visits=Count('id'),
+            bounce=Avg(Cast('bounced', output_field=IntegerField())),
+            duration=Avg('duration_sec')
+        ).order_by('-visits')[:5]
+        browsers = []
+        for row in by_browser:
+            share = (row['visits'] / total_visits * 100) if total_visits else 0
+            browsers.append({
+                'browser': row['browser'] or 'unknown',
+                'visits': row['visits'],
+                'share': round(share, 2),
+                'bounce_rate': round((row['bounce'] or 0) * 100, 1),
+                'avg_duration': round(row['duration'] or 0, 1)
+            })
+
         version_stats.append({
             'id': version.id,
             'name': version.name,
@@ -325,6 +654,9 @@ def api_dashboard(request):
             'bounce_rate': round((stats['bounce_rate'] or 0) * 100, 1),
             'issue_count': issue_count,
             'critical_issues': critical_issues,
+            'device_split': devices,
+            'browser_split': browsers,
+            'alerts': _build_alerts_dashboard(version),
         })
 
     recent_issues = UXIssue.objects.select_related('version').order_by('-created_at')[:5]
@@ -353,6 +685,140 @@ def api_dashboard(request):
         'version_stats': version_stats,
         'recent_issues': recent_issues_list,
     })
+
+
+def api_cohorts(request):
+    """JSON: список когорт по версии"""
+    version_id = request.GET.get('version')
+    if not version_id:
+        return JsonResponse({'error': 'version parameter is required'}, status=400)
+
+    cohorts = UserCohort.objects.filter(version_id=version_id).order_by('-percentage')
+    data = []
+    for c in cohorts:
+        data.append({
+            'id': c.id,
+            'name': c.name,
+            'percentage': round((c.percentage or 0) * 100, 2),  # в процентах
+            'users_count': c.users_count,
+            'avg_bounce_rate': c.avg_bounce_rate,
+            'avg_duration': c.avg_duration,
+            'avg_depth': c.metrics.get('depth') if isinstance(c.metrics, dict) else None,
+            'metrics': c.metrics,
+            'conversion_rates': c.conversion_rates,
+        })
+    return JsonResponse({'count': len(data), 'results': data})
+
+
+def api_pages(request):
+    """JSON: метрики по страницам для выбранной версии"""
+    version_id = request.GET.get('version')
+    if not version_id:
+        return JsonResponse({'error': 'version parameter is required'}, status=400)
+
+    try:
+        limit = int(request.GET.get('limit', 50))
+    except ValueError:
+        limit = 50
+    try:
+        min_views = int(request.GET.get('min_views', 0))
+    except ValueError:
+        min_views = 0
+
+    order = request.GET.get('order', '-exit_rate')
+    allowed_order = ['exit_rate', '-exit_rate', 'avg_time_on_page', '-avg_time_on_page', 'total_views', '-total_views']
+    if order not in allowed_order:
+        order = '-exit_rate'
+
+    qs = PageMetrics.objects.filter(version_id=version_id)
+    if min_views > 0:
+        qs = qs.filter(total_views__gte=min_views)
+    qs = qs.order_by(order)
+    if limit > 0:
+        qs = qs[:limit]
+
+    data = []
+    for m in qs:
+        norm_url = _normalize_issue_url(m.url)
+        data.append({
+            'url': m.url,
+            'norm_url': norm_url,
+            'readable': get_readable_page_name(m.url),
+            'page_title': m.page_title,
+            'total_views': m.total_views,
+            'unique_visitors': m.unique_visitors,
+            'avg_time_on_page': m.avg_time_on_page,
+            'bounce_rate': m.bounce_rate,
+            'exit_rate': m.exit_rate,
+            'avg_scroll_depth': m.avg_scroll_depth,
+            'dominant_cohort': m.dominant_cohort,
+            'dominant_device': m.dominant_device,
+        })
+    return JsonResponse({'count': len(data), 'results': data})
+
+
+def api_paths(request):
+    """
+    JSON: топ пользовательских путей (2-3 шага) для версии.
+    Путь считается по нормализованным URL, агрегируется частота и уникальные пользователи.
+    """
+    version_id = request.GET.get('version')
+    if not version_id:
+        return JsonResponse({'error': 'version parameter is required'}, status=400)
+    try:
+        limit = int(request.GET.get('limit', 20))
+    except ValueError:
+        limit = 20
+    try:
+        min_count = int(request.GET.get('min_count', 5))
+    except ValueError:
+        min_count = 5
+    results = _compute_paths(version_id, limit=limit, min_count=min_count)
+
+    return JsonResponse({'count': len(results), 'results': results})
+
+
+def api_issue_history(request):
+    """
+    JSON: История/жизненный цикл проблем.
+    Группируем по (issue_type, norm_url) и отдаём список наблюдений по версиям/датам.
+    """
+    issue_type = request.GET.get('issue_type')
+    norm_url_filter = request.GET.get('norm_url')
+
+    qs = UXIssue.objects.select_related('version').order_by('created_at')
+    if issue_type:
+        qs = qs.filter(issue_type=issue_type)
+
+    grouped = {}
+    for issue in qs:
+        norm_url = _normalize_issue_url(issue.location_url)
+        if norm_url_filter and norm_url != norm_url_filter:
+            continue
+        key = (issue.issue_type, norm_url)
+        if key not in grouped:
+            grouped[key] = {
+                'issue_type': issue.issue_type,
+                'norm_url': norm_url,
+                'readable_location': get_readable_page_name(issue.location_url),
+                'observations': []
+            }
+        grouped[key]['observations'].append({
+            'version': {'id': issue.version.id, 'name': issue.version.name},
+            'severity': issue.severity,
+            'impact_score': issue.impact_score,
+            'affected_sessions': issue.affected_sessions,
+            'trend': issue.trend,
+            'priority': issue.priority,
+            'created_at': issue.created_at.isoformat(),
+        })
+
+    results = []
+    for val in grouped.values():
+        val['observations'] = sorted(val['observations'], key=lambda x: x['created_at'])
+        results.append(val)
+
+    return JsonResponse({'count': len(results), 'results': results})
 
 def api_compare(request):
     """JSON: сравнение двух версий"""
@@ -391,6 +857,10 @@ def api_compare(request):
     v1_dur = stats_v1['duration'] or 0
     v2_dur = stats_v2['duration'] or 0
     comparison = _build_comparison(v1, v2)
+    device_compare = _device_split_compare(v1, v2, stats_v1, stats_v2)
+    browser_compare = _agent_split_compare(v1, v2, stats_v1, stats_v2, 'browser')
+    os_compare = _agent_split_compare(v1, v2, stats_v1, stats_v2, 'os')
+    alerts = _build_alerts_compare(comparison['issues_diff'], comparison['pages_diff'])
 
     # Приводим к JSON-сериализуемому виду
     def serialize_cohort(c):
@@ -467,6 +937,10 @@ def api_compare(request):
         'issues_diff': [serialize_issue_row(r) for r in comparison['issues_diff']],
         'pages_diff': [serialize_page_row(r) for r in comparison['pages_diff']],
         'cohorts_diff': [serialize_cohort_row(r) for r in comparison['cohorts_diff']],
+        'device_split': device_compare,
+        'browser_split': browser_compare,
+        'os_split': os_compare,
+        'alerts': alerts,
     }
 
     return JsonResponse({'comparison': data})

@@ -71,7 +71,7 @@ class Command(BaseCommand):
             
             # Visits columns - расширены для новых метрик
             visits_columns = [
-                'ym:s:visitID', 'ym:s:clientID', 'ym:s:dateTime', 
+                'ym:s:visitID', 'ym:s:clientID', 'ym:s:counterUserIDHash', 'ym:s:dateTime', 
                 'ym:s:visitDuration', 'ym:s:deviceCategory', 'ym:s:referer', 
                 'ym:s:bounce', 'ym:s:pageViews', 'ym:s:goalsID',
                 # Новые поля (100% или >99% заполнено)
@@ -109,27 +109,16 @@ class Command(BaseCommand):
                     self.stdout.write("Warning: Loaded only basic fields due to column mismatch.")
 
             def normalize_client_id(val):
+                """
+                Приводит clientID/counterUserIDHash к стабильной строке.
+                Учитывает float в научной нотации (часто в hits), чтобы совпадали с int из visits.
+                """
                 if pd.isna(val):
                     return None
-                if isinstance(val, float):
-                    return f"{val:.0f}"
-                if isinstance(val, (int,)):
-                    return str(val)
-                s = str(val)
-                if "e+" in s or "E+" in s:
-                    try:
-                        return f"{float(s):.0f}"
-                    except Exception:
-                        return s
-                return s
-
-            def normalize_client_id(val):
-                if pd.isna(val):
-                    return None
-                # Preserve full integer part if float looks like an integer
+                # Пробуем через float/Decimal, чтобы убрать научную нотацию
                 try:
-                    if isinstance(val, float) and val.is_integer():
-                        return str(int(val))
+                    # float('1.7e+18') -> 1700000000000000000
+                    return f"{float(val):.0f}"
                 except Exception:
                     pass
                 s = str(val)
@@ -143,11 +132,16 @@ class Command(BaseCommand):
             df_visits['client_id_norm'] = df_visits['ym:s:clientID'].apply(normalize_client_id)
             df_visits = df_visits[df_visits['client_id_norm'].notna()]
             df_visits['ym:s:clientID'] = df_visits['client_id_norm']
+            # Normalize counterUserIDHash for joins with hits (более надежный ключ)
+            if 'ym:s:counterUserIDHash' in df_visits.columns:
+                df_visits['counter_user_hash'] = df_visits['ym:s:counterUserIDHash'].apply(normalize_client_id)
+            else:
+                df_visits['counter_user_hash'] = None
             self.stdout.write(f"DEBUG: Visits loaded. Shape: {df_visits.shape}")
             
             # Hits columns - расширены для новых метрик
             hits_columns = [
-                'ym:pv:clientID', 'ym:pv:dateTime', 'ym:pv:URL', 
+                'ym:pv:clientID', 'ym:pv:counterUserIDHash', 'ym:pv:dateTime', 'ym:pv:URL', 
                 'ym:pv:title',    # 68% - использовать с проверкой на null
                 # Новые поля
                 'ym:pv:referer',           # 58%
@@ -170,6 +164,10 @@ class Command(BaseCommand):
             df_hits['client_id_norm'] = df_hits['ym:pv:clientID'].apply(normalize_client_id)
             df_hits = df_hits[df_hits['client_id_norm'].notna()]
             df_hits['ym:pv:clientID'] = df_hits['client_id_norm']
+            if 'ym:pv:counterUserIDHash' in df_hits.columns:
+                df_hits['counter_user_hash'] = df_hits['ym:pv:counterUserIDHash'].apply(normalize_client_id)
+            else:
+                df_hits['counter_user_hash'] = None
             self.stdout.write(f"DEBUG: Hits loaded. Shape: {df_hits.shape}")
 
             # 3. Process Visits (Sessions)
@@ -179,9 +177,13 @@ class Command(BaseCommand):
             if sample_limit > 0 and len(df_visits) > sample_limit:
                 self.stdout.write(f"Sampling {sample_limit} visits from {len(df_visits)}...")
                 df_visits = df_visits.head(sample_limit)
-                client_ids = df_visits['client_id_norm'].unique()
+                client_ids = set(df_visits['client_id_norm'].unique())
+                counter_hashes = set(df_visits['counter_user_hash'].dropna().unique()) if 'counter_user_hash' in df_visits else set()
                 before_hits = len(df_hits)
-                df_hits = df_hits[df_hits['client_id_norm'].isin(client_ids)]
+                df_hits = df_hits[
+                    df_hits['client_id_norm'].isin(client_ids)
+                    | df_hits['counter_user_hash'].isin(counter_hashes)
+                ]
                 after_hits = len(df_hits)
                 if after_hits == 0 and before_hits > 0:
                     self.stdout.write(self.style.WARNING(
@@ -192,6 +194,10 @@ class Command(BaseCommand):
                     df_hits['client_id_norm'] = df_hits['ym:pv:clientID'].apply(normalize_client_id)
                     df_hits = df_hits[df_hits['client_id_norm'].notna()]
                     df_hits['ym:pv:clientID'] = df_hits['client_id_norm']
+                    if 'ym:pv:counterUserIDHash' in df_hits.columns:
+                        df_hits['counter_user_hash'] = df_hits['ym:pv:counterUserIDHash'].apply(normalize_client_id)
+                    else:
+                        df_hits['counter_user_hash'] = None
 
             # Cache previous issues for routing comparisons
             self.prev_issue_index = self.build_previous_issue_index(version)
@@ -201,6 +207,7 @@ class Command(BaseCommand):
             batch_size = 10000
             total_visits = len(df_visits)
             visit_map_by_client = {}
+            counter_hash_to_client = {}
             
             for batch_start in range(0, total_visits, batch_size):
                 batch_end = min(batch_start + batch_size, total_visits)
@@ -223,6 +230,29 @@ class Command(BaseCommand):
                     traffic_src = row.get('ym:s:lastsignReferalSource') if 'ym:s:lastsignReferalSource' in row.index else None
                     net_type = row.get('ym:s:networkType') if 'ym:s:networkType' in row.index else None
                     
+                    # Обработка goalsID для воронок
+                    goals_id_list = []
+                    if 'ym:s:goalsID' in row.index:
+                        goals_id_raw = row.get('ym:s:goalsID')
+                        if pd.notna(goals_id_raw) and goals_id_raw:
+                            # goalsID может быть списком, строкой списка, или числом
+                            try:
+                                if isinstance(goals_id_raw, (list, tuple)):
+                                    goals_id_list = [int(g) for g in goals_id_raw if g]
+                                elif isinstance(goals_id_raw, str):
+                                    # Попытка распарсить строку "[12345, 67890]"
+                                    import ast
+                                    parsed = ast.literal_eval(goals_id_raw)
+                                    if isinstance(parsed, list):
+                                        goals_id_list = [int(g) for g in parsed if g]
+                                    else:
+                                        goals_id_list = [int(parsed)]
+                                else:
+                                    goals_id_list = [int(goals_id_raw)]
+                            except (ValueError, SyntaxError, TypeError):
+                                # Если не удалось распарсить, пропускаем
+                                goals_id_list = []
+                    
                     visit = VisitSession(
                         version=version,
                         visit_id=v_id,
@@ -244,8 +274,12 @@ class Command(BaseCommand):
                         exit_page=end_url if end_url and pd.notna(end_url) else None,
                         traffic_source=traffic_src if traffic_src and pd.notna(traffic_src) else None,
                         network_type=net_type if net_type and pd.notna(net_type) else None,
+                        goals_id=goals_id_list if goals_id_list else [],
                     )
                     visit_objects.append(visit)
+                    counter_hash = row.get('counter_user_hash') if 'counter_user_hash' in row else None
+                    if pd.notna(counter_hash):
+                        counter_hash_to_client[counter_hash] = c_id
                 
                 # Сохраняем батч и сразу получаем ID для маппинга
                 created = VisitSession.objects.bulk_create(visit_objects, ignore_conflicts=True)
@@ -262,6 +296,7 @@ class Command(BaseCommand):
             self.stdout.write("Loading visit mappings...")
             db_visits = VisitSession.objects.filter(version=version).values('id', 'client_id')
             client_to_visit_pk = {v['client_id']: v['id'] for v in db_visits}
+            hash_to_visit_pk = {h: client_to_visit_pk[c] for h, c in counter_hash_to_client.items() if c in client_to_visit_pk}
             self.stdout.write(f"Loaded {len(client_to_visit_pk)} visit mappings.")
 
             # 4. Process Hits (оптимизировано: батчами)
@@ -277,7 +312,13 @@ class Command(BaseCommand):
                 hit_objects = []
                 for _, row in batch_df.iterrows():
                     c_id = str(row.get('client_id_norm', ''))
-                    if c_id in client_to_visit_pk:
+                    counter_hash = row.get('counter_user_hash') if 'counter_user_hash' in row else None
+                    session_id = None
+                    if pd.notna(counter_hash) and counter_hash in hash_to_visit_pk:
+                        session_id = hash_to_visit_pk[counter_hash]
+                    elif c_id in client_to_visit_pk:
+                        session_id = client_to_visit_pk[c_id]
+                    if session_id:
                         # Обработка новых полей с проверкой на наличие
                         referrer = row.get('ym:pv:referer') if 'ym:pv:referer' in row.index else None
                         browser_val = row.get('ym:pv:browser') if 'ym:pv:browser' in row.index else None
@@ -287,7 +328,7 @@ class Command(BaseCommand):
                         device_cat = row.get('ym:pv:deviceCategory') if 'ym:pv:deviceCategory' in row.index else None
                         
                         hit = PageHit(
-                            session_id=client_to_visit_pk[c_id],
+                            session_id=session_id,
                             timestamp=pd.to_datetime(row.get('ym:pv:dateTime')),
                             url=row.get('ym:pv:URL', ''),
                             page_title=row.get('ym:pv:title') if pd.notna(row.get('ym:pv:title', '')) else None,
@@ -1182,12 +1223,15 @@ class Command(BaseCommand):
                     "depth_sum": 0.0,
                     "goal_sums": {gc: 0.0 for gc in goal_cols},
                     "interest_sums": {ic: 0.0 for ic in interest_cols},
+                    "client_ids": [],  # Для воронок: собираем client_ids пользователей этой когорты
                 }
             agg = combined[base_name]
             agg["count"] += len(cluster_data)
             agg["bounce_sum"] += cluster_data['bounce_prob'].sum()
             agg["duration_sum"] += cluster_data['avg_duration'].sum()
             agg["depth_sum"] += cluster_data['avg_depth'].sum()
+            # Собираем client_ids для воронок
+            agg["client_ids"].extend(list(cluster_data.index.astype(str)))
             for gc in goal_cols:
                 agg["goal_sums"][gc] += cluster_data[gc].sum()
             for ic in interest_cols:
@@ -1248,6 +1292,9 @@ class Command(BaseCommand):
             if detail_bits and "—" not in final_name:
                 final_name = f"{final_name} — {', '.join(detail_bits)}"
 
+            # Сохраняем client_ids пользователей этой когорты для анализа воронок
+            cohort_client_ids = agg.get("client_ids", [])
+
             UserCohort.objects.create(
                 version=version,
                 name=final_name,
@@ -1256,7 +1303,8 @@ class Command(BaseCommand):
                 users_count=total_users,
                 percentage=total_users / len(user_behavior),
                 metrics=metrics_dict,
-                conversion_rates=conversions
+                conversion_rates=conversions,
+                member_client_ids=cohort_client_ids  # Сохраняем client_ids для воронок
             )
             self.stdout.write(f"Saved cohort: {final_name} ({total_users} users)")
 

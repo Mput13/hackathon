@@ -50,11 +50,13 @@ class Command(BaseCommand):
         # Загружаем данные из БД в DataFrame
         self.stdout.write("📥 Загрузка данных из базы данных...")
         
-        # Загружаем visits
+        # Загружаем visits со всеми необходимыми полями
         visits_qs = VisitSession.objects.filter(version=version).values(
             'visit_id', 'client_id', 'start_time', 'duration_sec', 
             'device_category', 'source', 'bounced', 'page_views',
-            'is_returning_visitor', 'entry_page', 'exit_page'
+            'is_returning_visitor', 'entry_page', 'exit_page',
+            'browser', 'os', 'screen_width', 'screen_height', 'screen_format',
+            'traffic_source', 'network_type'
         )
         
         # Преобразуем в DataFrame с правильными именами колонок
@@ -71,14 +73,23 @@ class Command(BaseCommand):
                 'ym:s:pageViews': v['page_views'],
                 'ym:s:startURL': v['entry_page'] or '',
                 'ym:s:endURL': v['exit_page'] or '',
+                'ym:s:browser': v['browser'],
+                'ym:s:operatingSystem': v['os'],
+                'ym:s:screenWidth': v['screen_width'],
+                'ym:s:screenHeight': v['screen_height'],
+                'ym:s:screenFormat': v['screen_format'],
+                'ym:s:lastsignReferalSource': v['traffic_source'],
+                'ym:s:networkType': v['network_type'],
                 'ym:s:goalsID': None,  # Цели хранятся отдельно, но для анализа можем пропустить
             })
         
         df_visits = pd.DataFrame(visits_data)
         
-        # Загружаем hits
+        # Загружаем hits со всеми необходимыми полями
         hits_qs = PageHit.objects.filter(session__version=version).select_related('session').values(
-            'session__client_id', 'timestamp', 'url', 'page_title'
+            'session__client_id', 'timestamp', 'url', 'page_title',
+            'referrer_url', 'browser', 'os', 'screen_width', 'screen_height', 'device_category',
+            'time_on_page', 'scroll_depth', 'is_exit'
         )
         
         hits_data = []
@@ -88,6 +99,15 @@ class Command(BaseCommand):
                 'ym:pv:dateTime': h['timestamp'],
                 'ym:pv:URL': h['url'],
                 'ym:pv:title': h['page_title'],
+                'ym:pv:referer': h['referrer_url'],
+                'ym:pv:browser': h['browser'],
+                'ym:pv:operatingSystem': h['os'],
+                'ym:pv:screenWidth': h['screen_width'],
+                'ym:pv:screenHeight': h['screen_height'],
+                'ym:pv:deviceCategory': h['device_category'],
+                'time_on_page': h['time_on_page'],
+                'scroll_depth': h['scroll_depth'],
+                'is_exit': h['is_exit'],
             })
         
         df_hits = pd.DataFrame(hits_data)

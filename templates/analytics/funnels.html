@@ -1,0 +1,116 @@
+{% extends 'base.html' %}
+
+{% block header_title %}Воронки конверсии{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <h3 class="text-lg font-bold text-gray-800 mb-4">Выберите версию</h3>
+        <form method="get" class="flex items-center gap-4">
+            <select name="version" onchange="this.form.submit()" class="block w-full md:w-64 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 p-2 border">
+                <option value="">-- Выберите версию --</option>
+                {% for version in versions %}
+                <option value="{{ version.id }}" {% if selected_version and selected_version.id == version.id %}selected{% endif %}>
+                    {{ version.name }}
+                </option>
+                {% endfor %}
+            </select>
+        </form>
+    </div>
+</div>
+
+{% if selected_version %}
+<div class="mb-4 flex justify-between items-center">
+    <h2 class="text-2xl font-bold text-gray-800">Воронки для {{ selected_version.name }}</h2>
+    <div class="text-sm text-gray-500">
+        {% if funnels %}
+        Всего воронок: {{ funnels|length }}
+        {% else %}
+        Воронки не найдены
+        {% endif %}
+    </div>
+</div>
+
+{% if funnels %}
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    {% for funnel in funnels %}
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow">
+        <div class="flex justify-between items-start mb-4">
+            <div class="flex-1">
+                <h3 class="text-lg font-bold text-gray-800 mb-1">{{ funnel.name }}</h3>
+                {% if funnel.description %}
+                <p class="text-sm text-gray-600 mb-2">{{ funnel.description }}</p>
+                {% endif %}
+                <div class="flex items-center gap-2 text-xs text-gray-500">
+                    <span class="px-2 py-1 bg-gray-100 rounded">{{ funnel.steps|length }} шагов</span>
+                    {% if funnel.is_preset %}
+                    <span class="px-2 py-1 bg-indigo-100 text-indigo-700 rounded">Предустановленная</span>
+                    {% else %}
+                    <span class="px-2 py-1 bg-green-100 text-green-700 rounded">Кастомная</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        {% if funnel.has_metrics %}
+        <div class="mb-4 p-4 bg-gray-50 rounded-lg">
+            <div class="grid grid-cols-3 gap-4 text-center">
+                <div>
+                    <p class="text-xs text-gray-500 mb-1">Входов</p>
+                    <p class="text-xl font-bold text-gray-900">{{ funnel.total_entered }}</p>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-500 mb-1">Завершили</p>
+                    <p class="text-xl font-bold text-gray-900">{{ funnel.total_completed }}</p>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-500 mb-1">Конверсия</p>
+                    <p class="text-xl font-bold {% if funnel.overall_conversion < 10 %}text-red-500{% elif funnel.overall_conversion < 20 %}text-yellow-500{% else %}text-green-500{% endif %}">
+                        {{ funnel.overall_conversion }}%
+                    </p>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+            <p class="text-sm text-yellow-800">
+                ⚠️ Метрики еще не рассчитаны. Запустите команду <code class="bg-yellow-100 px-1 rounded">calculate_funnels</code>
+            </p>
+        </div>
+        {% endif %}
+
+        <div class="flex gap-2">
+            <a href="{% url 'funnel_detail' funnel.id %}" class="flex-1 text-center bg-indigo-600 text-white py-2 rounded-lg font-medium hover:bg-indigo-700 transition-colors">
+                Открыть →
+            </a>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center">
+    <svg class="w-16 h-16 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+    </svg>
+    <h3 class="text-xl font-bold text-gray-800 mb-2">Воронки не найдены</h3>
+    <p class="text-gray-600 mb-6">Для этой версии еще не созданы воронки конверсии.</p>
+    <div class="bg-gray-50 p-4 rounded-lg text-left max-w-2xl mx-auto">
+        <p class="text-sm font-semibold text-gray-800 mb-2">Создайте воронки через команду:</p>
+        <code class="block bg-gray-800 text-green-400 p-3 rounded text-sm">
+            docker-compose exec web python manage.py create_funnels --version "{{ selected_version.name }}"
+        </code>
+    </div>
+</div>
+{% endif %}
+
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center">
+    <svg class="w-16 h-16 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+    </svg>
+    <h3 class="text-xl font-bold text-gray-800 mb-2">Выберите версию</h3>
+    <p class="text-gray-600">Выберите версию продукта, чтобы просмотреть воронки конверсии.</p>
+</div>
+{% endif %}
+{% endblock %}
+

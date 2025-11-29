@@ -223,6 +223,29 @@ class Command(BaseCommand):
                     traffic_src = row.get('ym:s:lastsignReferalSource') if 'ym:s:lastsignReferalSource' in row.index else None
                     net_type = row.get('ym:s:networkType') if 'ym:s:networkType' in row.index else None
                     
+                    # Обработка goalsID для воронок
+                    goals_id_list = []
+                    if 'ym:s:goalsID' in row.index:
+                        goals_id_raw = row.get('ym:s:goalsID')
+                        if pd.notna(goals_id_raw) and goals_id_raw:
+                            # goalsID может быть списком, строкой списка, или числом
+                            try:
+                                if isinstance(goals_id_raw, (list, tuple)):
+                                    goals_id_list = [int(g) for g in goals_id_raw if g]
+                                elif isinstance(goals_id_raw, str):
+                                    # Попытка распарсить строку "[12345, 67890]"
+                                    import ast
+                                    parsed = ast.literal_eval(goals_id_raw)
+                                    if isinstance(parsed, list):
+                                        goals_id_list = [int(g) for g in parsed if g]
+                                    else:
+                                        goals_id_list = [int(parsed)]
+                                else:
+                                    goals_id_list = [int(goals_id_raw)]
+                            except (ValueError, SyntaxError, TypeError):
+                                # Если не удалось распарсить, пропускаем
+                                goals_id_list = []
+                    
                     visit = VisitSession(
                         version=version,
                         visit_id=v_id,
@@ -244,6 +267,7 @@ class Command(BaseCommand):
                         exit_page=end_url if end_url and pd.notna(end_url) else None,
                         traffic_source=traffic_src if traffic_src and pd.notna(traffic_src) else None,
                         network_type=net_type if net_type and pd.notna(net_type) else None,
+                        goals_id=goals_id_list if goals_id_list else [],
                     )
                     visit_objects.append(visit)
                 
@@ -1181,12 +1205,15 @@ class Command(BaseCommand):
                     "depth_sum": 0.0,
                     "goal_sums": {gc: 0.0 for gc in goal_cols},
                     "interest_sums": {ic: 0.0 for ic in interest_cols},
+                    "client_ids": [],  # Для воронок: собираем client_ids пользователей этой когорты
                 }
             agg = combined[base_name]
             agg["count"] += len(cluster_data)
             agg["bounce_sum"] += cluster_data['bounce_prob'].sum()
             agg["duration_sum"] += cluster_data['avg_duration'].sum()
             agg["depth_sum"] += cluster_data['avg_depth'].sum()
+            # Собираем client_ids для воронок
+            agg["client_ids"].extend(list(cluster_data.index.astype(str)))
             for gc in goal_cols:
                 agg["goal_sums"][gc] += cluster_data[gc].sum()
             for ic in interest_cols:
@@ -1247,6 +1274,9 @@ class Command(BaseCommand):
             if detail_bits and "—" not in final_name:
                 final_name = f"{final_name} — {', '.join(detail_bits)}"
 
+            # Сохраняем client_ids пользователей этой когорты для анализа воронок
+            cohort_client_ids = agg.get("client_ids", [])
+
             UserCohort.objects.create(
                 version=version,
                 name=final_name,
@@ -1255,7 +1285,8 @@ class Command(BaseCommand):
                 users_count=total_users,
                 percentage=total_users / len(user_behavior),
                 metrics=metrics_dict,
-                conversion_rates=conversions
+                conversion_rates=conversions,
+                member_client_ids=cohort_client_ids  # Сохраняем client_ids для воронок
             )
             self.stdout.write(f"Saved cohort: {final_name} ({total_users} users)")
 

@@ -1,0 +1,239 @@
+{% extends 'base.html' %}
+
+{% block header_title %}Создание воронки{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+        <h2 class="text-2xl font-bold text-gray-800 mb-4">Создать новую воронку</h2>
+        
+        {% if messages %}
+        <div class="mb-4">
+            {% for message in messages %}
+            <div class="bg-{{ message.tags }}-50 border border-{{ message.tags }}-200 text-{{ message.tags }}-800 px-4 py-3 rounded mb-2">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        
+        <form method="post" id="funnelForm">
+            {% csrf_token %}
+            
+            <div class="mb-6">
+                <label for="{{ form.version.id_for_label }}" class="block text-sm font-medium text-gray-700 mb-2">
+                    {{ form.version.label }}
+                </label>
+                {{ form.version }}
+                {% if form.version.errors %}
+                <p class="text-red-600 text-sm mt-1">{{ form.version.errors }}</p>
+                {% endif %}
+            </div>
+            
+            <div class="mb-6">
+                <label for="{{ form.name.id_for_label }}" class="block text-sm font-medium text-gray-700 mb-2">
+                    {{ form.name.label }} *
+                </label>
+                {{ form.name }}
+                {% if form.name.errors %}
+                <p class="text-red-600 text-sm mt-1">{{ form.name.errors }}</p>
+                {% endif %}
+            </div>
+            
+            <div class="mb-6">
+                <label for="{{ form.description.id_for_label }}" class="block text-sm font-medium text-gray-700 mb-2">
+                    {{ form.description.label }}
+                </label>
+                {{ form.description }}
+                {% if form.description.errors %}
+                <p class="text-red-600 text-sm mt-1">{{ form.description.errors }}</p>
+                {% endif %}
+            </div>
+            
+            <div class="mb-6">
+                <div class="flex items-center gap-4">
+                    <label class="flex items-center">
+                        {{ form.require_sequence }}
+                        <span class="ml-2 text-sm text-gray-700">{{ form.require_sequence.label }}</span>
+                    </label>
+                    <label class="flex items-center">
+                        {{ form.allow_skip_steps }}
+                        <span class="ml-2 text-sm text-gray-700">{{ form.allow_skip_steps.label }}</span>
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Шаги воронки -->
+            <div class="mb-6">
+                <div class="flex justify-between items-center mb-4">
+                    <label class="block text-sm font-medium text-gray-700">Шаги воронки *</label>
+                    <button type="button" onclick="addStep()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium">
+                        + Добавить шаг
+                    </button>
+                </div>
+                
+                <div id="stepsContainer" class="space-y-4">
+                    <!-- Шаги будут добавляться динамически -->
+                </div>
+                
+                <input type="hidden" name="steps_json" id="stepsJson" value="[]">
+            </div>
+            
+            {% if form.non_field_errors %}
+            <div class="mb-4 text-red-600">
+                {{ form.non_field_errors }}
+            </div>
+            {% endif %}
+            
+            <div class="flex gap-4">
+                <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium">
+                    Создать воронку
+                </button>
+                <a href="{% url 'funnels_list' %}" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-6 py-2 rounded-lg font-medium">
+                    Отмена
+                </a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+let stepCounter = 0;
+const goals = {{ goals_json|safe }};
+
+function addStep() {
+    stepCounter++;
+    const container = document.getElementById('stepsContainer');
+    const stepDiv = document.createElement('div');
+    stepDiv.className = 'bg-gray-50 border border-gray-200 rounded-lg p-4';
+    stepDiv.id = `step-${stepCounter}`;
+    
+    stepDiv.innerHTML = `
+        <div class="flex justify-between items-start mb-3">
+            <h4 class="font-medium text-gray-800">Шаг ${stepCounter}</h4>
+            <button type="button" onclick="removeStep(${stepCounter})" class="text-red-600 hover:text-red-800 text-sm">
+                Удалить
+            </button>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Тип шага *</label>
+                <select name="step_type_${stepCounter}" class="w-full border border-gray-300 rounded-md px-3 py-2" onchange="updateStepFields(${stepCounter})">
+                    <option value="url">URL</option>
+                    <option value="goal">Цель (Goal)</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Название шага *</label>
+                <input type="text" name="step_name_${stepCounter}" class="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="Например: Главная страница">
+            </div>
+        </div>
+        <div id="step_url_${stepCounter}" class="mt-4">
+            <label class="block text-sm font-medium text-gray-700 mb-2">URL *</label>
+            <input type="url" name="step_url_${stepCounter}" class="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="https://priem.mai.ru/...">
+        </div>
+        <div id="step_goal_${stepCounter}" class="mt-4 hidden">
+            <label class="block text-sm font-medium text-gray-700 mb-2">Код цели *</label>
+            <select name="step_goal_${stepCounter}" class="w-full border border-gray-300 rounded-md px-3 py-2">
+                <option value="">-- Выберите цель --</option>
+                ${goals.map(g => `<option value="${g.code}">${g.name} (${g.code})</option>`).join('')}
+            </select>
+        </div>
+    `;
+    
+    container.appendChild(stepDiv);
+    updateStepsJson();
+}
+
+function removeStep(stepId) {
+    const stepDiv = document.getElementById(`step-${stepId}`);
+    if (stepDiv) {
+        stepDiv.remove();
+        updateStepsJson();
+    }
+}
+
+function updateStepFields(stepId) {
+    const typeSelect = document.querySelector(`[name="step_type_${stepId}"]`);
+    const urlDiv = document.getElementById(`step_url_${stepId}`);
+    const goalDiv = document.getElementById(`step_goal_${stepId}`);
+    
+    if (typeSelect.value === 'url') {
+        urlDiv.classList.remove('hidden');
+        goalDiv.classList.add('hidden');
+    } else {
+        urlDiv.classList.add('hidden');
+        goalDiv.classList.remove('hidden');
+    }
+}
+
+function updateStepsJson() {
+    const steps = [];
+    const stepDivs = document.querySelectorAll('[id^="step-"]');
+    
+    stepDivs.forEach(stepDiv => {
+        const stepId = stepDiv.id.replace('step-', '');
+        const type = stepDiv.querySelector(`[name="step_type_${stepId}"]`)?.value;
+        const name = stepDiv.querySelector(`[name="step_name_${stepId}"]`)?.value;
+        
+        if (!type || !name) return;
+        
+        const step = {
+            type: type,
+            name: name
+        };
+        
+        if (type === 'url') {
+            const url = stepDiv.querySelector(`[name="step_url_${stepId}"]`)?.value;
+            if (url) step.url = url;
+        } else if (type === 'goal') {
+            const goalCode = stepDiv.querySelector(`[name="step_goal_${stepId}"]`)?.value;
+            if (goalCode) step.code = goalCode;
+        }
+        
+        if ((type === 'url' && step.url) || (type === 'goal' && step.code)) {
+            steps.push(step);
+        }
+    });
+    
+    document.getElementById('stepsJson').value = JSON.stringify(steps);
+}
+
+// Обновляем JSON при изменении полей
+document.addEventListener('DOMContentLoaded', function() {
+    document.getElementById('stepsContainer').addEventListener('input', updateStepsJson);
+    document.getElementById('stepsContainer').addEventListener('change', updateStepsJson);
+    
+    // Добавляем первый шаг по умолчанию
+    addStep();
+});
+
+// Валидация перед отправкой
+document.getElementById('funnelForm').addEventListener('submit', function(e) {
+    const stepsJson = JSON.parse(document.getElementById('stepsJson').value);
+    if (stepsJson.length === 0) {
+        e.preventDefault();
+        alert('Добавьте хотя бы один шаг воронки');
+        return false;
+    }
+});
+</script>
+
+<style>
+.form-control {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: #6366f1;
+    ring: 2px;
+    ring-color: #6366f1;
+}
+</style>
+{% endblock %}
+

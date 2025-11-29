@@ -34,6 +34,10 @@ class VisitSession(models.Model):
     exit_page = models.CharField(max_length=500, null=True)  # из ym:s:endURL (100%)
     traffic_source = models.CharField(max_length=200, null=True)  # из ym:s:lastsignReferalSource (25%, опционально)
     network_type = models.CharField(max_length=50, null=True)  # из ym:s:networkType (42%, опционально)
+    
+    # Goals достигнутые в этой сессии (для воронок)
+    # Список ID целей Yandex Metrica, например: [39566071, 53631805]
+    goals_id = models.JSONField(default=list, null=True, blank=True, help_text="Список ID целей, достигнутых в этой сессии")
 
 class PageHit(models.Model):
     """Действие внутри сессии (Hit)"""
@@ -121,10 +125,18 @@ class UserCohort(models.Model):
     metrics = models.JSONField(default=dict) # Полные метрики (bounce, duration, depth и т.д.)
     conversion_rates = models.JSONField(default=dict) # {"apply_it_button": 0.05, ...}
     
+    # Список client_id пользователей в этой когорте (для анализа воронок)
+    member_client_ids = models.JSONField(default=list, blank=True)
+    
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"{self.name} ({self.percentage*100:.1f}%)"
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['version', 'name']),
+        ]
 
 class DailyStat(models.Model):
     """Прекалькулированная статистика по дням для быстрых графиков"""
@@ -162,3 +174,68 @@ class PageMetrics(models.Model):
     
     def __str__(self):
         return f"{self.url} ({self.version.name})"
+
+
+class ConversionFunnel(models.Model):
+    """Воронка конверсии - последовательность шагов для достижения цели"""
+    version = models.ForeignKey(ProductVersion, on_delete=models.CASCADE, related_name='funnels')
+    
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    
+    # Шаги воронки как JSON
+    # Формат: [
+    #   {'type': 'goal', 'code': 'it_master_button', 'name': 'Кнопка IT-магистратура'},
+    #   {'type': 'url', 'url': '/apply/form', 'name': 'Форма заявки'},
+    #   {'type': 'goal', 'code': 'submitted_applications', 'name': 'Отправленные заявки'}
+    # ]
+    steps = models.JSONField(default=list)
+    
+    # Настройки расчета
+    require_sequence = models.BooleanField(default=True, help_text="Требовать последовательность шагов")
+    allow_skip_steps = models.BooleanField(default=False, help_text="Разрешить пропуск шагов")
+    
+    # Метаданные
+    is_preset = models.BooleanField(default=False, help_text="Предустановленная воронка")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"{self.name} ({self.version.name})"
+    
+    class Meta:
+        unique_together = ('version', 'name')
+        ordering = ['name']
+
+
+class FunnelMetrics(models.Model):
+    """Кэш рассчитанных метрик воронки"""
+    funnel = models.ForeignKey(ConversionFunnel, on_delete=models.CASCADE, related_name='metrics_cache')
+    version = models.ForeignKey(ProductVersion, on_delete=models.CASCADE)
+    
+    # Метрики воронки (JSON)
+    # Формат: {
+    #   'total_entered': 1234,
+    #   'total_completed': 188,
+    #   'overall_conversion': 15.2,
+    #   'step_metrics': [...],
+    #   'cohort_breakdown': {...},  # опционально
+    #   'ai_analysis': '...'  # AI-анализ и рекомендации
+    # }
+    metrics_json = models.JSONField(default=dict)
+    
+    # Метаданные расчета
+    calculated_at = models.DateTimeField(auto_now=True)
+    calculation_duration_sec = models.FloatField(null=True, blank=True)
+    
+    # Флаг: включена ли разбивка по когортам
+    includes_cohorts = models.BooleanField(default=False)
+    
+    class Meta:
+        unique_together = ('funnel', 'version', 'includes_cohorts')
+        indexes = [
+            models.Index(fields=['funnel', 'version']),
+        ]
+    
+    def __str__(self):
+        return f"{self.funnel.name} metrics ({self.version.name})"

@@ -200,3 +200,88 @@ def generate_stub_hypothesis(issue_type):
         'SEARCH_FAIL': "Гипотеза: Результаты поиска нерелевантны или пустые. Исправить: добавить подсказки/популярные запросы и ссылки на целевые разделы.",
     }
     return stubs.get(issue_type, "Рекомендуется детальный анализ поведения пользователя.")
+
+
+def analyze_funnel_with_ai(funnel_name, step_metrics, overall_conversion, cohort_name=None):
+    """
+    Анализирует воронку конверсии и генерирует рекомендации по улучшению
+    
+    Args:
+        funnel_name: Название воронки
+        step_metrics: Список метрик по шагам [{'step_name': ..., 'conversion_from_prev': ..., 'drop_off': ...}, ...]
+        overall_conversion: Общая конверсия воронки (%)
+        cohort_name: Название когорты (если анализ для конкретной когорты)
+    
+    Returns:
+        Строка с анализом и рекомендациями
+    """
+    # Находим проблемные шаги (конверсия < 50%)
+    problematic_steps = [
+        step for step in step_metrics 
+        if step.get('conversion_from_prev', 100) < 50
+    ]
+    
+    if not problematic_steps:
+        # Если нет проблемных шагов, даем общую оценку
+        context = f"Воронка '{funnel_name}' показывает конверсию {overall_conversion:.1f}%."
+        if cohort_name:
+            context += f" Анализ для когорты '{cohort_name}'."
+        context += " Все шаги имеют хорошую конверсию (>50%)."
+    else:
+        # Формируем контекст о проблемных шагах
+        problem_desc = []
+        for step in problematic_steps[:3]:  # Берем топ-3 проблемных шага
+            step_name = step.get('step_name', 'Неизвестный шаг')
+            conversion = step.get('conversion_from_prev', 0)
+            drop_off = step.get('drop_off', 0)
+            problem_desc.append(
+                f"Шаг '{step_name}': конверсия {conversion:.1f}%, потеряно {drop_off} пользователей"
+            )
+        
+        context = f"Воронка '{funnel_name}' имеет общую конверсию {overall_conversion:.1f}%.\n"
+        context += f"Проблемные шаги:\n" + "\n".join(problem_desc)
+        
+        if cohort_name:
+            context += f"\nАнализ для когорты '{cohort_name}'."
+    
+    prompt_content = f"""
+    Ты анализируешь воронку конверсии на портале Приемной Комиссии университета.
+    
+    {context}
+    
+    Твоя задача: дать краткий анализ и конкретные рекомендации по улучшению.
+    
+    Формат ответа:
+    - Первая строка: "Анализ:" с кратким выводом о проблеме
+    - Вторая строка: "Рекомендация:" с конкретным действием для улучшения (до 140 символов)
+    
+    Учитывай специфику:
+    - Абитуриенты часто спешат и испытывают стресс
+    - Формы должны быть простыми и понятными
+    - Навигация должна быть интуитивной
+    - Важна скорость загрузки страниц
+    
+    Избегай общих фраз. Давай конкретные действия: упростить форму, добавить CTA, 
+    сократить количество полей, улучшить валидацию, добавить прогресс-бар и т.д.
+    """
+    
+    system_text = """
+    Ты главный UX-аналитик и специалист по конверсионной оптимизации.
+    Твоя задача - находить конкретные проблемы в воронках конверсии и давать 
+    практические рекомендации, которые можно сразу внедрить.
+    Отвечай кратко, без воды, фокусируйся на действиях.
+    """
+    
+    result = _send_gpt_request(system_text, prompt_content)
+    
+    if not result:
+        # Fallback для проблемных шагов
+        if problematic_steps:
+            worst_step = max(problematic_steps, key=lambda x: x.get('drop_off', 0))
+            step_name = worst_step.get('step_name', 'шаг')
+            conversion = worst_step.get('conversion_from_prev', 0)
+            return f"Анализ: Низкая конверсия на шаге '{step_name}' ({conversion:.1f}%). Рекомендация: упростить переход и добавить прогресс-индикатор, улучшить видимость следующего шага."
+        else:
+            return f"Анализ: Воронка работает стабильно. Рекомендация: проанализировать поведение пользователей, дошедших до конца, для дальнейшей оптимизации."
+    
+    return result.strip()

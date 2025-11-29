@@ -1,0 +1,25 @@
+/* src/fonts.css */
+@font-face {
+font-family: 'Bahnschrift';
+src: url('/src/assets/fonts/Bahnschrift.woff2') format('woff2');
+font-weight: normal;
+font-style: normal;
+font-display: swap;
+}
+
+@font-face {
+font-family: 'Indiction Unicode TT';
+src: url('/src/assets/fonts/IndictionUnicodeTT.woff2') format('woff2');
+font-weight: normal;
+font-style: normal;
+font-display: swap;
+}
+
+/* CSS классы для удобного использования */
+.font-sans {
+font-family: 'Bahnschrift', 'Arial', system-ui, sans-serif;
+}
+
+.font-accent {
+font-family: 'Indiction Unicode TT', 'Bahnschrift', monospace;
+}

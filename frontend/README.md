@@ -1,0 +1,151 @@
+# UX Insight: AI-Powered UX Analytics Platform
+
+Платформа для автоматизированного анализа пользовательского опыта на основе данных Яндекс.Метрики. Автоматически выявляет UX-проблемы, сравнивает версии продукта и генерирует гипотезы с помощью GigaChat AI.
+
+Разработано в рамках хакатона PSB "AI Challenge: Banking".
+
+![Dashboard Screenshot](https://via.placeholder.com/800x400?text=Dashboard+Preview)
+
+## 🚀 Функциональность (текущее состояние)
+
+* **Анализ логов (Parquet)**: импорт визитов/хитов, нормализация client_id, расчёт time_on_page/is_exit SQL-окнами.
+* **Детекторы UX-проблем** (из Метрики):
+  * 😡 RAGE_CLICK, DEAD_CLICK
+  * 📉 HIGH_BOUNCE (отказы)
+  * 🔄 LOOPING, NAVIGATION_BACK (в т.ч. канонизация A↔B)
+  * 🧭 WANDERING (10+ просмотров без целей)
+  * 📝 FORM_ABANDON / FORM_FIELD_ERRORS
+  * 📉 FUNNEL_DROPOFF (настраиваемые шаги)
+  * 🔍 SEARCH_FAIL, 📜 SCAN_AND_DROP (быстрый скролл + выход)
+* **AI-инсайты**: YandexGPT (через `API_KEY`/`FOLDER_ID`), строгий формат “Гипотеза/Исправить”; заглушки при отсутствии ключей.
+* **Версионирование и роутинг**: для issues сохраняются `detected_version_name`, `trend` (new/worse/improved/stable), `priority`, рекомендованные роли.
+* **Сравнение версий** (бэкенд считает всё, фронт только рисует):
+  * Карточки: delta bounce/duration/visits
+  * Diff issues: new/worse/improved/resolved, impact Δ, нормализованные URL
+  * Diff страниц: new/removed/changed, delta exit/time (фильтр малотрафиковых страниц, кап на выбросы времени)
+  * Diff когорт: new/removed/changed (проценты показываются 0–100)
+* **UI**: Django templates (dash/issues/compare) с utility-классами.
+
+## 🛠 Технологический стек
+
+*   **Backend:** Python 3.11, Django 5.0
+*   **Data Processing:** Pandas, PyArrow (Optimized Parquet Reader)
+*   **Database:** PostgreSQL 15
+*   **AI:** Sber GigaChat API
+*   **Frontend:** Tailwind CSS, Chart.js
+*   **Infra:** Docker, Docker Compose
+
+## 📦 Установка и запуск
+
+### Предварительные требования
+*   Docker & Docker Compose
+*   Файлы данных `.parquet` (Visits и Hits за 2022 и 2024 год)
+
+### Шаг 1. Клонирование и настройка
+
+1.  Склонируйте репозиторий:
+    ```bash
+    git clone https://github.com/your-username/ux-insight.git
+    cd ux-insight
+    ```
+
+2.  Разместите файлы данных в корне проекта (рядом с `manage.py`):
+    *   `2022_yandex_metrika_visits.parquet`
+    *   `2022_yandex_metrika_hits.parquet`
+    *   `2024_yandex_metrika_visits.parquet`
+    *   `2024_yandex_metrika_hits.parquet`
+
+3.  Создайте файл `.env` на основе `.env.example`:
+    ```bash
+    cp .env.example .env
+    ```
+    Заполните `SECRET_KEY`, при необходимости поменяйте параметры БД. Для генерации гипотез укажите `folder_id` и `api_key` (Yandex Cloud, OpenAI-совместимый API). Если оставить их пустыми, будет использоваться заглушка. Docker Compose автоматически подхватит `.env` через `env_file`.
+    
+    Авто-миграции и загрузка метрик: по умолчанию `AUTO_INGEST=1`. При старте контейнера:
+    * применяются миграции `migrate`;
+    * если таблицы пустые, запускается `ingest_data` для двух датасетов (пути берутся из переменных `INGEST_*` или из дефолтных имен). Если данные уже есть, загрузка пропускается.
+
+### Шаг 2. Запуск контейнеров
+
+```bash
+docker-compose up --build -d
+```
+
+### Шаг 3. Инициализация БД
+
+```bash
+docker-compose exec web python manage.py migrate
+docker-compose exec web python manage.py createsuperuser
+```
+
+### Шаг 4. Загрузка и анализ данных
+
+Запустите ETL-скрипт для каждой версии. Это может занять несколько минут.
+
+**Загрузка версии 2022 (v1.0):**
+```bash
+docker-compose exec web python manage.py ingest_data \
+    --visits "2022_yandex_metrika_visits.parquet" \
+    --hits "2022_yandex_metrika_hits.parquet" \
+    --product-version "v1.0 (2022)" \
+    --year 2022
+```
+
+**Загрузка версии 2024 (v2.0):**
+```bash
+docker-compose exec web python manage.py ingest_data \
+    --visits "2024_yandex_metrika_visits.parquet" \
+    --hits "2024_yandex_metrika_hits.parquet" \
+    --product-version "v2.0 (2024)" \
+    --year 2024
+```
+
+### Шаг 5. Использование
+
+Откройте браузер: [http://localhost:8000](http://localhost:8000)
+
+*   **Dashboard:** Общая статистика.
+*   **Compare:** Сравните v1.0 и v2.0, чтобы увидеть изменения.
+*   **Issues:** Полный список проблем с рекомендациями AI.
+
+## 🔌 API для фронтенда (детально)
+
+Все ответы — JSON. URL нормализуются на бэкенде (normalize_issue_url), канонизируются back-петли A↔B.
+
+- `GET /api/versions/` — список версий `{id,name,release_date,is_active}`.
+- `GET /api/dashboard/` — агрегаты по всем версиям:
+  - `version_stats`: `{id,name,release_date,total_visits,avg_duration,bounce_rate,issue_count,critical_issues,device_split, browser_split, alerts}`
+    - `device_split`: по `device_category` (desktop/mobile/tablet/tv/unknown) — visits, share%, bounce%, avg_duration.
+    - `browser_split`: топ браузеров — visits, share%, bounce%, avg_duration.
+    - `alerts`: новые CRITICAL issues и страницы с высоким exit/bounce (средний трафик).
+  - `recent_issues`: последние 5 проблем с routing полями (trend/priority/recommended_specialists/detected_version_name).
+- `GET /api/compare/?v1=<id>&v2=<id>` — полное сравнение двух версий (если не заданы — первая и последняя):
+  - `stats_v1/v2`: visits, bounce%, duration.
+  - `issues_diff`: new/worse/improved/resolved с impact_diff, location_readable, routing полями.
+  - `pages_diff`: new/removed/changed, delta exit/time, norm URL, фильтр малотрафиковых.
+  - `cohorts_diff`: new/removed/changed, доля аудитории в %.
+  - `device_split`, `browser_split`, `os_split`: share/bounce/duration + дельты (p.p., s).
+  - `paths_v1/paths_v2`: топ путей 2–3 шага (norm URL), count, unique_users (по session_id).
+  - `alerts`: новые CRITICAL issues и рост exit на страницах (порог >10 п.п.).
+- `GET /api/issues/?version=<id>&severity=&issue_type=` — список проблем с readable_location, trend_label, priority, recommended_specialists.
+- `GET /api/daily-stats/?version=<id>` — таймсерия по дням: total_sessions, total_bounces, bounce_rate, avg_duration, extra_data.
+- `GET /api/cohorts/?version=<id>` — когорты версии: name, percentage (0–100), bounce/duration/depth, metrics, conversion_rates.
+- `GET /api/pages/?version=<id>&limit=50&min_views=0&order=-exit_rate` — метрики страниц: url, norm_url, readable, exit/bounce/avg_time/scroll, views, dominant_device/cohort.
+- `GET /api/paths/?version=<id>&limit=20&min_count=5` — топ путей (2–3 шага, norm URL), count, unique_users (по session_id).
+- `GET /api/issue-history/?issue_type=&norm_url=` — “жизненный цикл” проблем: группировка по (issue_type, norm_url) с наблюдениями по версиям/дате (impact, affected, trend, priority).
+
+Пример запроса:
+```bash
+curl "http://localhost:8000/api/compare/?v1=1&v2=2"
+```
+
+## 🧩 Структура проекта
+
+* `analytics/management/commands/ingest_data.py` — ETL + детекторы UX-проблем + расчёт метрик/когорт.
+* `analytics/ai_service.py` — клиент YandexGPT, подсказки/заглушки по типам issue.
+* `analytics/models.py` — схема: ProductVersion, VisitSession, PageHit, UXIssue (с routing-полями), UserCohort, PageMetrics, DailyStat.
+* `analytics/views.py` — дашборд/список/сравнение; сравнение вычисляется на бэкенде.
+* `templates/` — UI (dashboard, issues, compare).
+
+---
+License: MIT

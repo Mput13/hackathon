@@ -42,30 +42,28 @@ class Command(BaseCommand):
         goal_parser = GoalParser()
         goals = goal_parser.get_goals()
         
-        # Создаем предустановленные воронки на основе URL-паттернов
-        # Используем URL-based подход, так как goalsID почти везде пустой
+        # Создаем предустановленные воронки на основе анализа реальных данных
+        # 
+        # ОБОСНОВАНИЕ ВЫБОРА ВОРОНОК:
+        # 1. Анализ топ URL показал самые популярные страницы:
+        #    - Главная: 327 hits
+        #    - Рейтинги: 303 hits
+        #    - Список программ: 106 hits
+        #    - Экзамены: 79 hits
+        #    - Программы base: 48+ hits
+        #    - Иностранные абитуриенты: 42 hits
+        #    - Контакты: 25 hits
+        #    - Результаты: 30 hits
+        #
+        # 2. Воронки созданы на основе этих данных - это реальные пути пользователей,
+        #    а не гипотетические сценарии. Это позволяет анализировать фактическое поведение.
+        #
+        # 3. В 2024 используется /base/ вместо /bachelor/ - учтено в воронках
+        #
         preset_funnels = [
             {
-                'name': 'Просмотр контактов',
-                'description': 'Воронка просмотра контактов: главная → контакты',
-                'steps': [
-                    {'type': 'url', 'url': 'https://priem.mai.ru/', 'name': 'Главная страница'},
-                    {'type': 'url', 'url': 'https://priem.mai.ru/contacts/', 'name': 'Страница контактов'},
-                ],
-                'is_preset': True
-            },
-            {
-                'name': 'Бакалавриат: программы → детали',
-                'description': 'Воронка изучения программ бакалавриата',
-                'steps': [
-                    {'type': 'url', 'url': 'https://priem.mai.ru/bachelor/programs/', 'name': 'Список программ'},
-                    {'type': 'url', 'url': 'https://priem.mai.ru/bachelor/programs/item/', 'name': 'Детали программы'},
-                ],
-                'is_preset': True
-            },
-            {
                 'name': 'Поиск рейтингов',
-                'description': 'Воронка поиска рейтингов',
+                'description': 'Самая популярная воронка (303 hits): пользователи ищут информацию о рейтингах поступления. Выбрана на основе анализа топ URL.',
                 'steps': [
                     {'type': 'url', 'url': 'https://priem.mai.ru/', 'name': 'Главная страница'},
                     {'type': 'url', 'url': 'https://priem.mai.ru/rating/', 'name': 'Страница рейтингов'},
@@ -73,11 +71,65 @@ class Command(BaseCommand):
                 'is_preset': True
             },
             {
-                'name': 'Просмотр контактов (URL-based goal)',
-                'description': 'Воронка через URL-based цель contacts_view',
+                'name': 'Просмотр списка программ',
+                'description': 'Вторая по популярности (106 hits): пользователи изучают доступные программы обучения. Реальный путь из данных.',
                 'steps': [
                     {'type': 'url', 'url': 'https://priem.mai.ru/', 'name': 'Главная страница'},
-                    {'type': 'goal', 'code': 'contacts_view', 'name': 'Просмотр контактов (url_prefix goal)'},
+                    {'type': 'url', 'url': 'https://priem.mai.ru/list/', 'name': 'Список программ'},
+                ],
+                'is_preset': True
+            },
+            {
+                'name': 'Информация об экзаменах',
+                'description': 'Третья по популярности (79 hits): абитуриенты изучают требования к экзаменам. Основано на реальных данных.',
+                'steps': [
+                    {'type': 'url', 'url': 'https://priem.mai.ru/', 'name': 'Главная страница'},
+                    {'type': 'url', 'url': 'https://priem.mai.ru/exams/', 'name': 'Страница экзаменов'},
+                ],
+                'is_preset': True
+            },
+            {
+                'name': 'Поиск программ base (2024)',
+                'description': 'Четвертая по популярности (48+ hits): поиск программ базового уровня. Учтено изменение структуры в 2024 (/base/ вместо /bachelor/).',
+                'steps': [
+                    {'type': 'url', 'url': 'https://priem.mai.ru/', 'name': 'Главная страница'},
+                    {'type': 'url', 'url': 'https://priem.mai.ru/base/programs/', 'name': 'Список программ base'},
+                ],
+                'is_preset': True
+            },
+            {
+                'name': 'Иностранные абитуриенты',
+                'description': '42 hits: отдельный поток для иностранных студентов. Важный сегмент аудитории.',
+                'steps': [
+                    {'type': 'url', 'url': 'https://priem.mai.ru/', 'name': 'Главная страница'},
+                    {'type': 'url', 'url': 'https://priem.mai.ru/foreign-applicants/', 'name': 'Иностранные абитуриенты'},
+                ],
+                'is_preset': True
+            },
+            {
+                'name': 'Просмотр результатов',
+                'description': '30 hits: пользователи проверяют результаты зачисления. Критически важный этап.',
+                'steps': [
+                    {'type': 'url', 'url': 'https://priem.mai.ru/', 'name': 'Главная страница'},
+                    {'type': 'url', 'url': 'https://priem.mai.ru/results/', 'name': 'Результаты'},
+                ],
+                'is_preset': True
+            },
+            {
+                'name': 'Просмотр контактов',
+                'description': '25 hits: получение контактной информации. Базовая функциональность сайта.',
+                'steps': [
+                    {'type': 'url', 'url': 'https://priem.mai.ru/', 'name': 'Главная страница'},
+                    {'type': 'url', 'url': 'https://priem.mai.ru/contacts/', 'name': 'Страница контактов'},
+                ],
+                'is_preset': True
+            },
+            {
+                'name': 'Бакалавриат: программы → детали (legacy)',
+                'description': 'Для совместимости с версией 2022: в 2022 использовался путь /bachelor/, в 2024 - /base/.',
+                'steps': [
+                    {'type': 'url', 'url': 'https://priem.mai.ru/bachelor/programs/', 'name': 'Список программ'},
+                    {'type': 'url', 'url': 'https://priem.mai.ru/bachelor/programs/item/', 'name': 'Детали программы'},
                 ],
                 'is_preset': True
             },

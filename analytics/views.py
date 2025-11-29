@@ -551,7 +551,11 @@ def funnels_list(request):
     
     funnels = []
     if selected_version:
-        funnels = ConversionFunnel.objects.filter(version=selected_version).order_by('name')
+        # Показываем только preset-воронки (созданные вручную)
+        funnels = ConversionFunnel.objects.filter(
+            version=selected_version,
+            is_preset=True
+        ).order_by('name')
         
         # Добавляем информацию о метриках
         for funnel in funnels:
@@ -619,7 +623,11 @@ def api_funnels(request):
     except ProductVersion.DoesNotExist:
         return JsonResponse({'error': 'Version not found'}, status=404)
     
-    funnels = ConversionFunnel.objects.filter(version=version).order_by('name')
+    # Возвращаем только preset-воронки
+    funnels = ConversionFunnel.objects.filter(
+        version=version,
+        is_preset=True
+    ).order_by('name')
     
     results = []
     for funnel in funnels:

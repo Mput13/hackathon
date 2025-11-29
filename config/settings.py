@@ -13,7 +13,15 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-default-key')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', '0') == '1'
 
-ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost 127.0.0.1 [::1]').split(' ')
+raw_allowed_hosts = os.environ.get('DJANGO_ALLOWED_HOSTS')
+if raw_allowed_hosts:
+    ALLOWED_HOSTS = raw_allowed_hosts.split()
+else:
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]']
+
+# In debug we accept any host to avoid DisallowedHost errors when accessing via docker bridge IPs.
+if DEBUG and '*' not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append('*')
 
 
 # Application definition
@@ -116,4 +124,3 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-

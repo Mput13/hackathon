@@ -136,6 +136,18 @@ AUTO_FUNNELS=1
 - `AUTO_INGEST=1` автоматически загрузит данные при первом запуске
 - `AUTO_FUNNELS=1` автоматически создаст и рассчитает preset-воронки
 
+### Шаг 4: Запуск фронтенда (Vite/React)
+
+Фронт находится в каталоге `frontend` (отдельно от Django). Требуется Node.js 18+.
+
+```bash
+cd frontend
+npm install
+npm run dev   # по умолчанию http://localhost:5173
+```
+
+ENV-файл для фронта: `frontend/.env.example` — при необходимости скопируйте в `.env` и пропишите `VITE_API_BASE_URL` (адрес Django API).
+
 ### Шаг 4: Запуск контейнеров
 
 ```bash
